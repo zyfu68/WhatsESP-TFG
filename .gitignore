@@ -1,3 +1,13 @@
 ﻿# Temporales de Word
 ~$*.docx
 *.tmp
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+
+# --- Secrets / env ---
+WhatsESP/backend/.env
