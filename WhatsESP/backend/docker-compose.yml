@@ -1,0 +1,16 @@
+services:
+  db:
+    image: mysql:8.4
+    container_name: whatesp-mysql
+    environment:
+      MYSQL_DATABASE: whatesp
+      MYSQL_USER: whatesp
+      MYSQL_PASSWORD: CHANGE_ME
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    ports:
+      - '3307:3306'
+    volumes:
+      - whatesp_mysql:/var/lib/mysql
+
+volumes:
+  whatesp_mysql:
