@@ -1,47 +1,65 @@
-﻿import os
+﻿"""
+alembic/env.py
+
+Objetivo:
+- Asegurar que Alembic puede importar "app.*" (añadiendo backend a sys.path)
+- Cargar Base.metadata (target_metadata) para autogenerate
+- Usar la DATABASE_URL del proyecto (misma que usa FastAPI)
+"""
+
+from __future__ import annotations
+
+# -------------------------
+# Imports estándar
+# -------------------------
 import sys
+from pathlib import Path
 from logging.config import fileConfig
 
+# -------------------------
+# Imports Alembic / SQLAlchemy
+# -------------------------
 from alembic import context
-from sqlalchemy import pool
-from sqlalchemy.engine import engine_from_config
+from sqlalchemy import engine_from_config, pool
 
-# Permite importar 'app.*' desde la raíz del backend
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, BASE_DIR)
-
-# Carga .env si existe (no se sube a Git)
-try:
-    from dotenv import load_dotenv
-    load_dotenv(os.path.join(BASE_DIR, ".env"))
-except Exception:
-    pass
-
+# -------------------------
+# Config Alembic
+# -------------------------
 config = context.config
 
+# Logging (lee alembic.ini)
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Más adelante pondremos aquí Base.metadata para autogenerar migraciones
-target_metadata = None
+# -------------------------
+# 1) Asegurar imports: mete /backend en sys.path
+#    __file__ = .../backend/alembic/env.py
+#    parents[1] = .../backend
+# -------------------------
+BASE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BASE_DIR))
 
-def _get_database_url() -> str:
-    # Preferimos la URL ya construida en app.database si está disponible
-    try:
-        from app.database import DATABASE_URL
-        return DATABASE_URL
-    except Exception:
-        host = os.getenv("DB_HOST", "127.0.0.1")
-        port = os.getenv("DB_PORT", "3306")
-        name = os.getenv("DB_NAME", "whatesp")
-        user = os.getenv("DB_USER", "whatesp")
-        pwd  = os.getenv("DB_PASSWORD", "")
-        return f"mysql+pymysql://{user}:{pwd}@{host}:{port}/{name}?charset=utf8mb4"
+# -------------------------
+# 2) Importa Base + DATABASE_URL y fuerza a cargar modelos
+#    Importar app.models hace que se registren las tablas en Base.metadata
+# -------------------------
+from app.database import Base, DATABASE_URL  # noqa: E402
+import app.models  # noqa: F401, E402  (solo para registrar modelos)
 
+# Esta es la metadata que Alembic usará para autogenerate
+target_metadata = Base.metadata
+
+# -------------------------
+# 3) Funciones estándar Alembic
+# -------------------------
 def run_migrations_offline() -> None:
-    url = _get_database_url()
+    """
+    Modo offline:
+    - No conecta a la BD
+    - Genera SQL “en seco”
+    """
     context.configure(
-        url=url,
+        url=DATABASE_URL,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -51,11 +69,16 @@ def run_migrations_offline() -> None:
     with context.begin_transaction():
         context.run_migrations()
 
-def run_migrations_online() -> None:
-    url = _get_database_url()
 
-    configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = url
+def run_migrations_online() -> None:
+    """
+    Modo online:
+    - Conecta a la BD
+    - Compara metadata vs BD real y aplica cambios
+    """
+    # Sobrescribe sqlalchemy.url del alembic.ini con la URL real del proyecto
+    configuration = config.get_section(config.config_ini_section) or {}
+    configuration["sqlalchemy.url"] = DATABASE_URL
 
     connectable = engine_from_config(
         configuration,
@@ -73,6 +96,8 @@ def run_migrations_online() -> None:
         with context.begin_transaction():
             context.run_migrations()
 
+
+# Ejecuta el modo correspondiente
 if context.is_offline_mode():
     run_migrations_offline()
 else:
