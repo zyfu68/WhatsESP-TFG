@@ -3,17 +3,18 @@ app/database.py
 
 Objetivo:
 - Cargar variables de entorno (.env)
-- Construir la URL de conexión a MySQL
-- Crear el "engine" (conexión) de SQLAlchemy
-- Crear SessionLocal (sesiones/transactions)
-- Definir Base (clase base de modelos)
-- Proveer get_db() para FastAPI (inyección de dependencias)
+- Construir la URL de conexión a MySQL (soporta contraseñas con @, !, etc.)
+- Crear el engine de SQLAlchemy
+- Crear SessionLocal
+- Definir Base (modelos)
+- Proveer get_db() para FastAPI
 """
 
 # -------------------------
 # Imports estándar
 # -------------------------
 import os
+from pathlib import Path
 from typing import Generator
 
 # -------------------------
@@ -21,32 +22,36 @@ from typing import Generator
 # -------------------------
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 # -------------------------
-# 1) Cargar variables del .env (ubicado en la raíz del backend)
+# 1) Cargar .env (ruta explícita para evitar líos de cwd)
 # -------------------------
-load_dotenv()
+ENV_PATH = Path(__file__).resolve().parents[1] / ".env"  # .../backend/.env
+load_dotenv(dotenv_path=ENV_PATH)
 
 DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
-DB_PORT = os.getenv("DB_PORT", "3306")
+DB_PORT = int(os.getenv("DB_PORT", "3306"))
 DB_NAME = os.getenv("DB_NAME", "whatesp")
 DB_USER = os.getenv("DB_USER", "whatesp")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
 # -------------------------
-# 2) Construir URL de conexión
-#    - mysql+pymysql: driver PyMySQL
-#    - charset=utf8mb4: emojis/acentos OK
+# 2) URL segura (NO concatenar strings con passwords raras)
 # -------------------------
-DATABASE_URL = (
-    f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-    "?charset=utf8mb4"
+DATABASE_URL = URL.create(
+    "mysql+pymysql",
+    username=DB_USER,
+    password=DB_PASSWORD,   # aquí ya puede haber @ ! lo que sea
+    host=DB_HOST,
+    port=DB_PORT,
+    database=DB_NAME,
+    query={"charset": "utf8mb4"},
 )
 
 # -------------------------
-# 3) Engine: la “puerta” a la base de datos
-#    pool_pre_ping=True evita conexiones muertas
+# 3) Engine
 # -------------------------
 engine = create_engine(
     DATABASE_URL,
@@ -54,7 +59,7 @@ engine = create_engine(
 )
 
 # -------------------------
-# 4) SessionLocal: fábrica de sesiones (una sesión = conversación con la BD)
+# 4) SessionLocal
 # -------------------------
 SessionLocal = sessionmaker(
     autocommit=False,
@@ -63,12 +68,12 @@ SessionLocal = sessionmaker(
 )
 
 # -------------------------
-# 5) Base: clase base que usan los modelos para generar tablas/metadata
+# 5) Base
 # -------------------------
 Base = declarative_base()
 
 # -------------------------
-# 6) get_db(): dependencia típica en FastAPI
+# 6) get_db()
 # -------------------------
 def get_db() -> Generator:
     """
