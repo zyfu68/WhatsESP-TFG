@@ -26,7 +26,7 @@ from datetime import datetime, timedelta
 # -------------------------
 # Imports FastAPI / Pydantic
 # -------------------------
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 # -------------------------
@@ -36,6 +36,7 @@ from sqlalchemy import text
 
 # Importa el engine (y de paso carga .env si tu database.py lo hace)
 from app.database import engine
+from app.security.tokens import get_current_principal
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -63,6 +64,10 @@ class LoginResponse(BaseModel):
     expires_at: datetime
 
 
+class LogoutResponse(BaseModel):
+    detail: str = "logged out"
+
+
 # -------------------------
 # Helpers
 # -------------------------
@@ -72,7 +77,7 @@ def _hash_token(raw_token: str) -> str:
 
 
 # -------------------------
-# Endpoint
+# Endpoints
 # -------------------------
 @router.post("/login", response_model=LoginResponse)
 def login(payload: LoginRequest) -> LoginResponse:
@@ -167,3 +172,31 @@ def login(payload: LoginRequest) -> LoginResponse:
 
     # 4) Respuesta al cliente
     return LoginResponse(access_token=raw_token, expires_at=expires_at)
+
+
+@router.post("/logout", response_model=LogoutResponse)
+def logout(principal: dict = Depends(get_current_principal)) -> LogoutResponse:
+    """
+    Logout MVP:
+    - Requiere Bearer token válido.
+    - Revoca *ese* token marcando revoked_at.
+
+    Resultado esperado:
+    - /auth/logout -> 200
+    - Cualquier endpoint protegido con ese token -> 401 (Token revoked)
+    """
+    now = datetime.utcnow()
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE tokens
+                SET revoked_at = :now
+                WHERE id = :tid AND revoked_at IS NULL
+                """
+            ),
+            {"now": now, "tid": int(principal["token_id"])},
+        )
+
+    return LogoutResponse()
