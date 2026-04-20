@@ -44,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -54,6 +55,8 @@ import java.io.BufferedReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 private const val PREFS_NAME = "whatesp_prefs"
@@ -393,7 +396,6 @@ private fun ChatScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val chatTitle = "${chat.otherUsername} (Chat ${chat.chatId})"
     var messagesMessage by remember { mutableStateOf("") }
     var chatMessages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
     var newMessageContent by remember { mutableStateOf("") }
@@ -546,16 +548,22 @@ private fun ChatScreen(
         Spacer(modifier = Modifier.height(8.dp))
 
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Bottom
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             OutlinedTextField(
                 value = newMessageContent,
                 onValueChange = { newMessageContent = it },
-                label = { Text("Mensaje") },
-                modifier = Modifier.weight(1f),
+                placeholder = { Text("Mensaje...") },
+                modifier = Modifier
+                    .weight(1f)
+                    .height(56.dp),
+                shape = RoundedCornerShape(28.dp),
                 colors = TextFieldDefaults.colors(),
-                enabled = !isSendMessageLoading
+                enabled = !isSendMessageLoading,
+                singleLine = true
             )
 
             Spacer(modifier = Modifier.width(8.dp))
@@ -664,7 +672,7 @@ private fun MessageItem(message: ChatMessage) {
                     color = bubbleColor,
                     shape = bubbleShape
                 )
-                .padding(horizontal = 14.dp, vertical = 10.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             Column {
                 Text(
@@ -673,15 +681,33 @@ private fun MessageItem(message: ChatMessage) {
                     color = contentColor
                 )
 
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(6.dp))
 
-                Text(
-                    text = message.createdAt,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = contentColor
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(end = 4.dp),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Text(
+                        text = formatMessageTime(message.createdAt),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = contentColor.copy(alpha = 0.65f),
+                        fontSize = 11.sp
+                    )
+                }
             }
         }
+    }
+}
+
+private fun formatMessageTime(createdAt: String): String {
+    return try {
+        val normalized = createdAt.replace(" ", "T")
+        val dateTime = LocalDateTime.parse(normalized)
+        dateTime.format(DateTimeFormatter.ofPattern("HH:mm"))
+    } catch (e: Exception) {
+        createdAt
     }
 }
 
