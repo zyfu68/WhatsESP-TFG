@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,16 +16,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -36,17 +40,21 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -55,8 +63,6 @@ import java.io.BufferedReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 private const val PREFS_NAME = "whatesp_prefs"
@@ -141,23 +147,28 @@ private fun MainScreen(
     var deviceName by remember { mutableStateOf("Android Emulator") }
 
     var statusMessage by remember { mutableStateOf("Comprobando sesion guardada...") }
-    var meMessage by remember { mutableStateOf("Resultado de /me pendiente") }
     var chatsMessage by remember { mutableStateOf("Resultado de /chats pendiente") }
-    var chats by remember { mutableStateOf<List<ChatSummary>>(emptyList()) }
+    var emergencyMessage by remember { mutableStateOf("Resultado de emergencia pendiente") }
     var logoutMessage by remember { mutableStateOf("Resultado de logout pendiente") }
+    var chats by remember { mutableStateOf<List<ChatSummary>>(emptyList()) }
+
+    var latestEmergencyAlert by remember { mutableStateOf<EmergencyEvent?>(null) }
+    var lastSeenEmergencyId by remember { mutableLongStateOf(0L) }
+    var dismissedEmergencyId by remember { mutableLongStateOf(0L) }
 
     var isAuthenticated by remember { mutableStateOf(false) }
     var isCheckingSession by remember { mutableStateOf(true) }
     var isLoading by remember { mutableStateOf(false) }
-    var isMeLoading by remember { mutableStateOf(false) }
     var isChatsLoading by remember { mutableStateOf(false) }
+    var isEmergencyLoading by remember { mutableStateOf(false) }
     var isLogoutLoading by remember { mutableStateOf(false) }
 
     fun resetProtectedUi() {
         chats = emptyList()
-        meMessage = "Resultado de /me pendiente"
         chatsMessage = "Resultado de /chats pendiente"
+        emergencyMessage = "Resultado de emergencia pendiente"
         logoutMessage = "Resultado de logout pendiente"
+        latestEmergencyAlert = null
         onForceBackToMain()
     }
 
@@ -166,6 +177,39 @@ private fun MainScreen(
         isAuthenticated = false
         statusMessage = message
         resetProtectedUi()
+    }
+
+    fun handleProtectedFailure(errorMessage: String) {
+        if (isAuthErrorMessage(errorMessage)) {
+            invalidateLocalSession("Sesion no valida o caducada. Inicia sesion de nuevo.")
+        }
+    }
+
+    fun loadChats() {
+        isChatsLoading = true
+        chatsMessage = "Consultando /chats..."
+
+        CoroutineScope(Dispatchers.IO).launch {
+            val result = chatsRequest(context = context)
+
+            withContext(Dispatchers.Main) {
+                isChatsLoading = false
+                if (result.isSuccess) {
+                    chats = result.getOrDefault(emptyList())
+                    chatsMessage = if (chats.isEmpty()) {
+                        "No hay chats disponibles."
+                    } else {
+                        "Chats cargados correctamente."
+                    }
+                } else {
+                    chats = emptyList()
+                    val errorMessage =
+                        result.exceptionOrNull()?.message ?: "Error desconocido"
+                    chatsMessage = errorMessage
+                    handleProtectedFailure(errorMessage)
+                }
+            }
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -182,6 +226,7 @@ private fun MainScreen(
                         isAuthenticated = true
                         statusMessage =
                             "Sesion restaurada correctamente.\nUsuario: ${session.username}\nDispositivo: ${session.deviceName}\nExpira: ${session.expiresAt}"
+                        loadChats()
                     } else {
                         invalidateLocalSession("No hay sesion valida. Inicia sesion primero.")
                     }
@@ -192,284 +237,430 @@ private fun MainScreen(
         }
     }
 
-    fun handleProtectedFailure(errorMessage: String) {
-        if (isAuthErrorMessage(errorMessage)) {
-            invalidateLocalSession("Sesion no valida o caducada. Inicia sesion de nuevo.")
+    LaunchedEffect(isAuthenticated) {
+        if (!isAuthenticated) return@LaunchedEffect
+
+        while (isAuthenticated) {
+            val result = withContext(Dispatchers.IO) {
+                latestEmergencyRequest(context)
+            }
+
+            if (result.isSuccess) {
+                val emergency = result.getOrNull()
+
+                if (emergency != null) {
+                    if (lastSeenEmergencyId == 0L) {
+                        lastSeenEmergencyId = emergency.id
+                    } else if (emergency.id != lastSeenEmergencyId) {
+                        lastSeenEmergencyId = emergency.id
+
+                        if (emergency.id != dismissedEmergencyId) {
+                            latestEmergencyAlert = emergency
+                        }
+                    }
+                }
+            } else {
+                val errorMessage = result.exceptionOrNull()?.message ?: ""
+                if (isAuthErrorMessage(errorMessage)) {
+                    invalidateLocalSession("Sesion no valida o caducada. Inicia sesion de nuevo.")
+                }
+            }
+
+            delay(5000)
         }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(24.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.Center
+    Box(
+        modifier = modifier.fillMaxSize()
     ) {
-        Text(
-            text = "WhatsESP",
-            style = MaterialTheme.typography.headlineMedium
-        )
+        if (isAuthenticated) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp)
+                    .padding(bottom = 110.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "WhatsESP",
+                            style = MaterialTheme.typography.headlineMedium
+                        )
 
-        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
 
-        Text(
-            text = "Login Android",
-            style = MaterialTheme.typography.titleMedium
-        )
+                        Text(
+                            text = "Tus chats",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    }
 
-        Spacer(modifier = Modifier.height(24.dp))
+                    Button(
+                        onClick = {
+                            isLogoutLoading = true
+                            logoutMessage = "Cerrando sesion..."
 
-        OutlinedTextField(
-            value = username,
-            onValueChange = { username = it },
-            label = { Text("Usuario") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            colors = TextFieldDefaults.colors()
-        )
+                            CoroutineScope(Dispatchers.IO).launch {
+                                val result = logoutRequest(context = context)
 
-        Spacer(modifier = Modifier.height(12.dp))
+                                withContext(Dispatchers.Main) {
+                                    isLogoutLoading = false
 
-        OutlinedTextField(
-            value = credential,
-            onValueChange = { credential = it },
-            label = { Text("Credential") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            colors = TextFieldDefaults.colors()
-        )
+                                    if (result.isSuccess) {
+                                        isAuthenticated = false
+                                        resetProtectedUi()
+                                        logoutMessage = result.getOrDefault("Logout OK")
+                                        statusMessage = "Sesion cerrada correctamente."
+                                    } else {
+                                        val errorMessage =
+                                            result.exceptionOrNull()?.message ?: "Error desconocido"
+                                        logoutMessage = errorMessage
+                                        handleProtectedFailure(errorMessage)
+                                    }
+                                }
+                            }
+                        },
+                        enabled = !isLogoutLoading && !isCheckingSession,
+                        shape = RoundedCornerShape(20.dp)
+                    ) {
+                        Text("Cerrar sesión")
+                    }
+                }
 
-        Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-        OutlinedTextField(
-            value = deviceName,
-            onValueChange = { deviceName = it },
-            label = { Text("Nombre del dispositivo") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            colors = TextFieldDefaults.colors()
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Button(
-            onClick = {
-                isLoading = true
-                statusMessage = "Iniciando sesion..."
-
-                CoroutineScope(Dispatchers.IO).launch {
-                    val result = loginRequest(
-                        context = context,
-                        username = username,
-                        credential = credential,
-                        deviceName = deviceName
+                if (latestEmergencyAlert != null) {
+                    EmergencyAlertCard(
+                        emergency = latestEmergencyAlert!!,
+                        onDismiss = {
+                            dismissedEmergencyId = latestEmergencyAlert?.id ?: 0L
+                            latestEmergencyAlert = null
+                        }
                     )
 
-                    withContext(Dispatchers.Main) {
-                        isLoading = false
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
 
-                        if (result.isSuccess) {
-                            val loginResult = result.getOrNull()
+                if (isChatsLoading) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                } else if (chats.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = chatsMessage,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        items(chats) { chat ->
+                            ChatListItem(
+                                chat = chat,
+                                onClick = { onOpenChat(chat) }
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp)
+                    .padding(bottom = 110.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = "WhatsESP",
+                    style = MaterialTheme.typography.headlineMedium
+                )
 
-                            if (loginResult != null) {
-                                saveToken(
-                                    context = context,
-                                    accessToken = loginResult.accessToken,
-                                    expiresAt = loginResult.expiresAt
-                                )
+                Spacer(modifier = Modifier.height(8.dp))
 
-                                isAuthenticated = true
-                                statusMessage =
-                                    "Login OK. Sesion iniciada.\nExpira: ${loginResult.expiresAt}"
-                            } else {
-                                isAuthenticated = false
-                                statusMessage = "Error inesperado: respuesta vacia"
+                Text(
+                    text = "Login Android",
+                    style = MaterialTheme.typography.titleMedium
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    label = { Text("Usuario") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    colors = TextFieldDefaults.colors()
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = credential,
+                    onValueChange = { credential = it },
+                    label = { Text("Credential") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    colors = TextFieldDefaults.colors()
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = deviceName,
+                    onValueChange = { deviceName = it },
+                    label = { Text("Nombre del dispositivo") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    colors = TextFieldDefaults.colors()
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Button(
+                    onClick = {
+                        isLoading = true
+                        statusMessage = "Iniciando sesion..."
+
+                        CoroutineScope(Dispatchers.IO).launch {
+                            val result = loginRequest(
+                                context = context,
+                                username = username,
+                                credential = credential,
+                                deviceName = deviceName
+                            )
+
+                            withContext(Dispatchers.Main) {
+                                isLoading = false
+
+                                if (result.isSuccess) {
+                                    val loginResult = result.getOrNull()
+
+                                    if (loginResult != null) {
+                                        saveToken(
+                                            context = context,
+                                            accessToken = loginResult.accessToken,
+                                            expiresAt = loginResult.expiresAt
+                                        )
+
+                                        isAuthenticated = true
+                                        statusMessage =
+                                            "Login OK. Sesion iniciada.\nExpira: ${loginResult.expiresAt}"
+                                        loadChats()
+                                    } else {
+                                        isAuthenticated = false
+                                        statusMessage = "Error inesperado: respuesta vacia"
+                                    }
+                                } else {
+                                    isAuthenticated = false
+                                    statusMessage =
+                                        result.exceptionOrNull()?.message ?: "Error desconocido"
+                                }
                             }
-                        } else {
-                            isAuthenticated = false
-                            statusMessage =
-                                result.exceptionOrNull()?.message ?: "Error desconocido"
                         }
-                    }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isLoading && !isCheckingSession
+                ) {
+                    Text("Iniciar sesion")
                 }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !isLoading && !isCheckingSession
-        ) {
-            Text("Iniciar sesion")
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                if (isCheckingSession || isLoading) {
+                    CircularProgressIndicator()
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+
+                Text(
+                    text = statusMessage,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        EmergencyBottomButton(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 24.dp),
+            enabled = !isEmergencyLoading
+        ) {
+            isEmergencyLoading = true
+            emergencyMessage = "Enviando evento de emergencia..."
 
-        Button(
-            onClick = {
-                isMeLoading = true
-                meMessage = "Consultando /me..."
+            CoroutineScope(Dispatchers.IO).launch {
+                val result = emergencyRequest(
+                    context = context,
+                    latitude = 41.6561,
+                    longitude = -0.8773,
+                    note = "Prueba emergencia desde Android"
+                )
 
-                CoroutineScope(Dispatchers.IO).launch {
-                    val result = meRequest(context = context)
+                withContext(Dispatchers.Main) {
+                    isEmergencyLoading = false
 
-                    withContext(Dispatchers.Main) {
-                        isMeLoading = false
-
-                        if (result.isSuccess) {
-                            meMessage = result.getOrDefault("GET /me OK")
-                        } else {
-                            val errorMessage =
-                                result.exceptionOrNull()?.message ?: "Error desconocido"
-                            meMessage = errorMessage
-                            handleProtectedFailure(errorMessage)
-                        }
+                    if (result.isSuccess) {
+                        emergencyMessage =
+                            result.getOrDefault("Emergencia enviada correctamente.")
+                    } else {
+                        val errorMessage =
+                            result.exceptionOrNull()?.message ?: "Error desconocido"
+                        emergencyMessage = errorMessage
+                        handleProtectedFailure(errorMessage)
                     }
                 }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = isAuthenticated && !isMeLoading && !isCheckingSession
-        ) {
-            Text("Probar /me")
+            }
         }
+    }
+}
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(
-            onClick = {
-                isChatsLoading = true
-                chatsMessage = "Consultando /chats..."
-
-                CoroutineScope(Dispatchers.IO).launch {
-                    val result = chatsRequest(context = context)
-
-                    withContext(Dispatchers.Main) {
-                        isChatsLoading = false
-                        if (result.isSuccess) {
-                            chats = result.getOrDefault(emptyList())
-                            chatsMessage = if (chats.isEmpty()) {
-                                "GET /chats OK: no hay chats."
-                            } else {
-                                "GET /chats OK: pulsa un chat para abrirlo."
-                            }
-                        } else {
-                            chats = emptyList()
-                            val errorMessage =
-                                result.exceptionOrNull()?.message ?: "Error desconocido"
-                            chatsMessage = errorMessage
-                            handleProtectedFailure(errorMessage)
-                        }
-                    }
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = isAuthenticated && !isChatsLoading && !isCheckingSession
+@Composable
+private fun ChatListItem(
+    chat: ChatSummary,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        shape = RoundedCornerShape(20.dp),
+        tonalElevation = 2.dp,
+        color = MaterialTheme.colorScheme.surfaceVariant
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 16.dp)
         ) {
-            Text("Listar chats")
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (isAuthenticated && chats.isNotEmpty()) {
             Text(
-                text = "Chats disponibles",
-                style = MaterialTheme.typography.titleMedium
+                text = chat.otherUsername,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = "Chat ${chat.chatId}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            chats.forEach { chat ->
-                Button(
-                    onClick = { onOpenChat(chat) },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = "${chat.otherUsername} (Chat ${chat.chatId})\n${chat.lastMessagePreview}"
-                    )
-                }
+            Text(
+                text = chat.lastMessagePreview,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.95f)
+            )
+        }
+    }
+}
 
-                Spacer(modifier = Modifier.height(8.dp))
+@Composable
+private fun EmergencyBottomButton(
+    modifier: Modifier = Modifier,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.size(84.dp),
+        shape = CircleShape,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Color(0xFFD93025),
+            contentColor = Color.White
+        )
+    ) {
+        Text(
+            text = "SOS",
+            fontSize = 18.sp
+        )
+    }
+}
+
+@Composable
+private fun EmergencyAlertCard(
+    emergency: EmergencyEvent,
+    onDismiss: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFFB3261E)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Text(
+                text = "ALERTA DE EMERGENCIA",
+                style = MaterialTheme.typography.titleMedium,
+                color = Color.White
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Evento: ${emergency.id}",
+                color = Color.White
+            )
+            Text(
+                text = "Usuario: ${emergency.userId}",
+                color = Color.White
+            )
+            Text(
+                text = "Dispositivo: ${emergency.deviceId}",
+                color = Color.White
+            )
+            Text(
+                text = "Latitud: ${emergency.latitude}",
+                color = Color.White
+            )
+            Text(
+                text = "Longitud: ${emergency.longitude}",
+                color = Color.White
+            )
+            Text(
+                text = "Nota: ${emergency.note}",
+                color = Color.White
+            )
+            Text(
+                text = "Fecha: ${emergency.createdAt}",
+                color = Color.White
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Button(onClick = onDismiss) {
+                Text("Cerrar alerta")
             }
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(
-            onClick = {
-                isLogoutLoading = true
-                logoutMessage = "Cerrando sesion..."
-
-                CoroutineScope(Dispatchers.IO).launch {
-                    val result = logoutRequest(context = context)
-
-                    withContext(Dispatchers.Main) {
-                        isLogoutLoading = false
-
-                        if (result.isSuccess) {
-                            isAuthenticated = false
-                            resetProtectedUi()
-                            logoutMessage = result.getOrDefault("Logout OK")
-                            statusMessage = "Sesion cerrada correctamente."
-                        } else {
-                            val errorMessage =
-                                result.exceptionOrNull()?.message ?: "Error desconocido"
-                            logoutMessage = errorMessage
-                            handleProtectedFailure(errorMessage)
-                        }
-                    }
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = isAuthenticated && !isLogoutLoading && !isCheckingSession
-        ) {
-            Text("Cerrar sesion")
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (isCheckingSession || isLoading) {
-            CircularProgressIndicator()
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-
-        Text(
-            text = statusMessage,
-            style = MaterialTheme.typography.bodyMedium
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (isMeLoading) {
-            CircularProgressIndicator()
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-
-        Text(
-            text = meMessage,
-            style = MaterialTheme.typography.bodyMedium
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (isChatsLoading) {
-            CircularProgressIndicator()
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-
-        Text(
-            text = chatsMessage,
-            style = MaterialTheme.typography.bodyMedium
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (isLogoutLoading) {
-            CircularProgressIndicator()
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-
-        Text(
-            text = logoutMessage,
-            style = MaterialTheme.typography.bodyMedium
-        )
     }
 }
 
@@ -485,8 +676,10 @@ private fun ChatScreen(
     var chatMessages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
     var newMessageContent by remember { mutableStateOf("") }
     var sendMessageResult by remember { mutableStateOf("") }
+    var emergencyMessage by remember { mutableStateOf("") }
     var isMessagesLoading by remember { mutableStateOf(false) }
     var isSendMessageLoading by remember { mutableStateOf(false) }
+    var isEmergencyLoading by remember { mutableStateOf(false) }
     val messagesListState = rememberLazyListState()
 
     fun expireSessionAndReturn() {
@@ -532,188 +725,240 @@ private fun ChatScreen(
         }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp)
+    Box(
+        modifier = modifier.fillMaxSize()
     ) {
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            tonalElevation = 2.dp
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+                .padding(bottom = 110.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                tonalElevation = 2.dp
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = chat.otherUsername,
-                        style = MaterialTheme.typography.titleLarge
-                    )
-                    Text(
-                        text = "Chat ${chat.chatId}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = chat.otherUsername,
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                        Text(
+                            text = "Chat ${chat.chatId}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
 
-                Spacer(modifier = Modifier.width(12.dp))
+                    Spacer(modifier = Modifier.width(12.dp))
 
-                Button(onClick = onBack) {
-                    Text("Volver")
+                    Button(onClick = onBack) {
+                        Text("Volver")
+                    }
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-        HorizontalDivider()
+            HorizontalDivider()
 
-        Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            state = messagesListState,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            if (isMessagesLoading) {
-                item {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 32.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            CircularProgressIndicator()
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                state = messagesListState,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (isMessagesLoading) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator()
 
-                            Spacer(modifier = Modifier.height(12.dp))
+                                Spacer(modifier = Modifier.height(12.dp))
 
+                                Text(
+                                    text = "Cargando mensajes...",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                } else if (messagesMessage.isNotBlank()) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
                             Text(
-                                text = "Cargando mensajes...",
+                                text = messagesMessage,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                } else if (chatMessages.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "Todavia no hay mensajes en este chat.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
-                }
-            } else if (messagesMessage.isNotBlank()) {
-                item {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 32.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = messagesMessage,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.error
-                        )
+                } else {
+                    items(chatMessages) { message ->
+                        MessageItem(message = message)
                     }
-                }
-            } else if (chatMessages.isEmpty()) {
-                item {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 32.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "Todavia no hay mensajes en este chat.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            } else {
-                items(chatMessages) { message ->
-                    MessageItem(message = message)
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedTextField(
-                value = newMessageContent,
-                onValueChange = { newMessageContent = it },
-                placeholder = { Text("Mensaje...") },
+            Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .height(56.dp),
-                shape = RoundedCornerShape(28.dp),
-                colors = TextFieldDefaults.colors(),
-                enabled = !isSendMessageLoading,
-                singleLine = true
-            )
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = newMessageContent,
+                    onValueChange = { newMessageContent = it },
+                    placeholder = { Text("Mensaje...") },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(56.dp),
+                    shape = RoundedCornerShape(28.dp),
+                    colors = TextFieldDefaults.colors(),
+                    enabled = !isSendMessageLoading,
+                    singleLine = true
+                )
 
-            Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(8.dp))
 
-            Button(
-                onClick = {
-                    val contentToSend = newMessageContent.trim()
+                Button(
+                    onClick = {
+                        val contentToSend = newMessageContent.trim()
 
-                    if (contentToSend.isBlank()) {
-                        sendMessageResult = "El contenido del mensaje no puede estar vacio."
-                    } else {
-                        isSendMessageLoading = true
-                        sendMessageResult = ""
+                        if (contentToSend.isBlank()) {
+                            sendMessageResult = "El contenido del mensaje no puede estar vacio."
+                        } else {
+                            isSendMessageLoading = true
+                            sendMessageResult = ""
 
-                        CoroutineScope(Dispatchers.IO).launch {
-                            val result = sendMessageRequest(
-                                context = context,
-                                chatId = chat.chatId,
-                                content = contentToSend
-                            )
+                            CoroutineScope(Dispatchers.IO).launch {
+                                val result = sendMessageRequest(
+                                    context = context,
+                                    chatId = chat.chatId,
+                                    content = contentToSend
+                                )
 
-                            withContext(Dispatchers.Main) {
-                                isSendMessageLoading = false
+                                withContext(Dispatchers.Main) {
+                                    isSendMessageLoading = false
 
-                                if (result.isSuccess) {
-                                    newMessageContent = ""
-                                    sendMessageResult = ""
-                                    loadMessages()
-                                } else {
-                                    val errorMessage =
-                                        result.exceptionOrNull()?.message ?: "Error desconocido"
-                                    sendMessageResult = errorMessage
+                                    if (result.isSuccess) {
+                                        newMessageContent = ""
+                                        sendMessageResult = ""
+                                        loadMessages()
+                                    } else {
+                                        val errorMessage =
+                                            result.exceptionOrNull()?.message
+                                                ?: "Error desconocido"
+                                        sendMessageResult = errorMessage
 
-                                    if (isAuthErrorMessage(errorMessage)) {
-                                        expireSessionAndReturn()
+                                        if (isAuthErrorMessage(errorMessage)) {
+                                            expireSessionAndReturn()
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                },
-                enabled = !isSendMessageLoading
-            ) {
-                Text(if (isSendMessageLoading) "..." else "Enviar")
+                    },
+                    enabled = !isSendMessageLoading
+                ) {
+                    Text(if (isSendMessageLoading) "..." else "Enviar")
+                }
+            }
+
+            if (sendMessageResult.isNotBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = sendMessageResult,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+
+            if (emergencyMessage.isNotBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = emergencyMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
             }
         }
 
-        if (sendMessageResult.isNotBlank()) {
-            Spacer(modifier = Modifier.height(8.dp))
+        EmergencyBottomButton(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 24.dp),
+            enabled = !isEmergencyLoading
+        ) {
+            isEmergencyLoading = true
+            emergencyMessage = "Enviando evento de emergencia..."
 
-            Text(
-                text = sendMessageResult,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error
-            )
+            CoroutineScope(Dispatchers.IO).launch {
+                val result = emergencyRequest(
+                    context = context,
+                    latitude = 41.6561,
+                    longitude = -0.8773,
+                    note = "Prueba emergencia desde Android"
+                )
+
+                withContext(Dispatchers.Main) {
+                    isEmergencyLoading = false
+
+                    if (result.isSuccess) {
+                        emergencyMessage =
+                            result.getOrDefault("Emergencia enviada correctamente.")
+                    } else {
+                        val errorMessage =
+                            result.exceptionOrNull()?.message ?: "Error desconocido"
+                        emergencyMessage = errorMessage
+
+                        if (isAuthErrorMessage(errorMessage)) {
+                            expireSessionAndReturn()
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -746,6 +991,16 @@ private data class ChatMessage(
     val content: String,
     val createdAt: String,
     val senderUserId: Int
+)
+
+private data class EmergencyEvent(
+    val id: Long,
+    val userId: Int,
+    val deviceId: Int,
+    val latitude: String,
+    val longitude: String,
+    val note: String,
+    val createdAt: String
 )
 
 @Composable
@@ -814,9 +1069,11 @@ private fun MessageItem(message: ChatMessage) {
 
 private fun formatMessageTime(createdAt: String): String {
     return try {
-        val normalized = createdAt.replace(" ", "T")
-        val dateTime = LocalDateTime.parse(normalized)
-        dateTime.format(DateTimeFormatter.ofPattern("HH:mm"))
+        if (createdAt.length >= 16) {
+            createdAt.substring(11, 16)
+        } else {
+            createdAt
+        }
     } catch (e: Exception) {
         createdAt
     }
@@ -977,41 +1234,6 @@ private fun restoreSessionRequest(context: Context): Result<SessionInfo> {
     } catch (e: Exception) {
         clearToken(context)
         Result.failure(Exception("Fallo restaurando sesion: ${e.message}", e))
-    }
-}
-
-private fun meRequest(context: Context): Result<String> {
-    return try {
-        val accessToken = getSavedToken(context)
-
-        if (accessToken.isNullOrBlank()) {
-            return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
-        }
-
-        val url = URL("http://10.0.2.2:8000/me")
-        val connection = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 5000
-            readTimeout = 5000
-            setRequestProperty("Authorization", "Bearer $accessToken")
-        }
-
-        val responseCode = connection.responseCode
-
-        val responseText = if (responseCode in 200..299) {
-            connection.inputStream.bufferedReader().use(BufferedReader::readText)
-        } else {
-            connection.errorStream?.bufferedReader()?.use(BufferedReader::readText)
-                ?: "Error HTTP $responseCode"
-        }
-
-        if (responseCode in 200..299) {
-            Result.success("GET /me OK:\n$responseText")
-        } else {
-            Result.failure(Exception("HTTP $responseCode: $responseText"))
-        }
-    } catch (e: Exception) {
-        Result.failure(Exception("Fallo en /me: ${e.message}", e))
     }
 }
 
@@ -1206,6 +1428,124 @@ private fun sendMessageRequest(context: Context, chatId: Int, content: String): 
         }
     } catch (e: Exception) {
         Result.failure(Exception("Fallo enviando mensaje: ${e.message}", e))
+    }
+}
+
+private fun emergencyRequest(
+    context: Context,
+    latitude: Double,
+    longitude: Double,
+    note: String
+): Result<String> {
+    return try {
+        val accessToken = getSavedToken(context)
+
+        if (accessToken.isNullOrBlank()) {
+            return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
+        }
+
+        val url = URL("http://10.0.2.2:8000/emergency")
+        val connection = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 5000
+            readTimeout = 5000
+            doOutput = true
+            setRequestProperty("Authorization", "Bearer $accessToken")
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+        }
+
+        val jsonBody = JSONObject().apply {
+            put("latitude", latitude)
+            put("longitude", longitude)
+            put("note", note)
+        }
+
+        OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
+            writer.write(jsonBody.toString())
+            writer.flush()
+        }
+
+        val responseCode = connection.responseCode
+
+        val responseText = if (responseCode in 200..299) {
+            connection.inputStream.bufferedReader().use(BufferedReader::readText)
+        } else {
+            connection.errorStream?.bufferedReader()?.use(BufferedReader::readText)
+                ?: "Error HTTP $responseCode"
+        }
+
+        if (responseCode in 200..299) {
+            try {
+                val jsonResponse = JSONObject(responseText)
+                val eventId = jsonResponse.optInt("event_id", 0)
+                val createdAt = jsonResponse.optString("created_at", "Sin fecha")
+                val savedLatitude = jsonResponse.optString("latitude", latitude.toString())
+                val savedLongitude = jsonResponse.optString("longitude", longitude.toString())
+
+                Result.success(
+                    "Emergencia enviada correctamente." +
+                            "\nEvento: $eventId" +
+                            "\nLatitud: $savedLatitude" +
+                            "\nLongitud: $savedLongitude" +
+                            "\nFecha: $createdAt"
+                )
+            } catch (e: Exception) {
+                Result.failure(
+                    Exception("Error parseando /emergency: ${e.message}\n$responseText")
+                )
+            }
+        } else {
+            Result.failure(Exception("HTTP $responseCode: $responseText"))
+        }
+    } catch (e: Exception) {
+        Result.failure(Exception("Fallo en /emergency: ${e.message}", e))
+    }
+}
+
+private fun latestEmergencyRequest(context: Context): Result<EmergencyEvent> {
+    return try {
+        val accessToken = getSavedToken(context)
+
+        if (accessToken.isNullOrBlank()) {
+            return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
+        }
+
+        val url = URL("http://10.0.2.2:8000/emergency/latest")
+        val connection = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 5000
+            readTimeout = 5000
+            setRequestProperty("Authorization", "Bearer $accessToken")
+        }
+
+        val responseCode = connection.responseCode
+
+        val responseText = if (responseCode in 200..299) {
+            connection.inputStream.bufferedReader().use(BufferedReader::readText)
+        } else {
+            connection.errorStream?.bufferedReader()?.use(BufferedReader::readText)
+                ?: "Error HTTP $responseCode"
+        }
+
+        if (responseCode in 200..299) {
+            val jsonResponse = JSONObject(responseText)
+
+            Result.success(
+                EmergencyEvent(
+                    id = jsonResponse.optLong("id", 0L),
+                    userId = jsonResponse.optInt("user_id", 0),
+                    deviceId = jsonResponse.optInt("device_id", 0),
+                    latitude = jsonResponse.optString("latitude", "Sin latitud"),
+                    longitude = jsonResponse.optString("longitude", "Sin longitud"),
+                    note = jsonResponse.optString("note", "Sin nota"),
+                    createdAt = jsonResponse.optString("created_at", "Sin fecha")
+                )
+            )
+        } else {
+            Result.failure(Exception("HTTP $responseCode: $responseText"))
+        }
+    } catch (e: Exception) {
+        Result.failure(Exception("Fallo en /emergency/latest: ${e.message}", e))
     }
 }
 

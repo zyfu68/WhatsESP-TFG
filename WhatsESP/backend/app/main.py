@@ -5,6 +5,7 @@ from app.database import engine
 from app.routes.auth import router as auth_router
 from app.routes.devices import router as devices_router
 from app.routes.chats import router as chats_router
+from app.routes.emergency import router as emergency_router
 from app.security.tokens import get_current_principal
 
 app = FastAPI(title="WhatsESP API", version="0.1.0")
@@ -13,6 +14,7 @@ app = FastAPI(title="WhatsESP API", version="0.1.0")
 app.include_router(auth_router)
 app.include_router(devices_router)
 app.include_router(chats_router)
+app.include_router(emergency_router)
 
 
 @app.get("/status")
@@ -32,6 +34,7 @@ def me(principal: dict = Depends(get_current_principal)):
     return {
         "user_id": principal["user_id"],
         "username": principal["username"],
+        "device_id": principal["device_id"],
         "device_uuid": principal["device_uuid"],
         "device_name": principal["device_name"],
         "expires_at": principal["expires_at"],
