@@ -84,6 +84,10 @@ class MainActivity : ComponentActivity() {
                                     selectedChat = chat
                                     currentScreen = AppScreen.Chat
                                 },
+                                onForceBackToMain = {
+                                    selectedChat = null
+                                    currentScreen = AppScreen.Main
+                                },
                                 modifier = Modifier.padding(innerPadding)
                             )
                         }
@@ -96,6 +100,11 @@ class MainActivity : ComponentActivity() {
                                     context = this,
                                     chat = chat,
                                     onBack = { currentScreen = AppScreen.Main },
+                                    onSessionExpired = {
+                                        clearToken(this)
+                                        selectedChat = null
+                                        currentScreen = AppScreen.Main
+                                    },
                                     modifier = Modifier.padding(innerPadding)
                                 )
                             } else {
@@ -104,6 +113,10 @@ class MainActivity : ComponentActivity() {
                                     onOpenChat = { selected ->
                                         selectedChat = selected
                                         currentScreen = AppScreen.Chat
+                                    },
+                                    onForceBackToMain = {
+                                        selectedChat = null
+                                        currentScreen = AppScreen.Main
                                     },
                                     modifier = Modifier.padding(innerPadding)
                                 )
@@ -120,20 +133,70 @@ class MainActivity : ComponentActivity() {
 private fun MainScreen(
     context: Context,
     onOpenChat: (ChatSummary) -> Unit,
+    onForceBackToMain: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var username by remember { mutableStateOf("demo") }
     var credential by remember { mutableStateOf("WESP_shared_dev_2026!") }
     var deviceName by remember { mutableStateOf("Android Emulator") }
-    var statusMessage by remember { mutableStateOf("Pendiente de iniciar sesion") }
+
+    var statusMessage by remember { mutableStateOf("Comprobando sesion guardada...") }
     var meMessage by remember { mutableStateOf("Resultado de /me pendiente") }
     var chatsMessage by remember { mutableStateOf("Resultado de /chats pendiente") }
     var chats by remember { mutableStateOf<List<ChatSummary>>(emptyList()) }
     var logoutMessage by remember { mutableStateOf("Resultado de logout pendiente") }
+
+    var isAuthenticated by remember { mutableStateOf(false) }
+    var isCheckingSession by remember { mutableStateOf(true) }
     var isLoading by remember { mutableStateOf(false) }
     var isMeLoading by remember { mutableStateOf(false) }
     var isChatsLoading by remember { mutableStateOf(false) }
     var isLogoutLoading by remember { mutableStateOf(false) }
+
+    fun resetProtectedUi() {
+        chats = emptyList()
+        meMessage = "Resultado de /me pendiente"
+        chatsMessage = "Resultado de /chats pendiente"
+        logoutMessage = "Resultado de logout pendiente"
+        onForceBackToMain()
+    }
+
+    fun invalidateLocalSession(message: String) {
+        clearToken(context)
+        isAuthenticated = false
+        statusMessage = message
+        resetProtectedUi()
+    }
+
+    LaunchedEffect(Unit) {
+        CoroutineScope(Dispatchers.IO).launch {
+            val result = restoreSessionRequest(context)
+
+            withContext(Dispatchers.Main) {
+                isCheckingSession = false
+
+                if (result.isSuccess) {
+                    val session = result.getOrNull()
+
+                    if (session != null) {
+                        isAuthenticated = true
+                        statusMessage =
+                            "Sesion restaurada correctamente.\nUsuario: ${session.username}\nDispositivo: ${session.deviceName}\nExpira: ${session.expiresAt}"
+                    } else {
+                        invalidateLocalSession("No hay sesion valida. Inicia sesion primero.")
+                    }
+                } else {
+                    invalidateLocalSession("No hay sesion valida. Inicia sesion primero.")
+                }
+            }
+        }
+    }
+
+    fun handleProtectedFailure(errorMessage: String) {
+        if (isAuthErrorMessage(errorMessage)) {
+            invalidateLocalSession("Sesion no valida o caducada. Inicia sesion de nuevo.")
+        }
+    }
 
     Column(
         modifier = modifier
@@ -217,12 +280,15 @@ private fun MainScreen(
                                     expiresAt = loginResult.expiresAt
                                 )
 
+                                isAuthenticated = true
                                 statusMessage =
-                                    "Login OK. Token guardado.\nExpira: ${loginResult.expiresAt}"
+                                    "Login OK. Sesion iniciada.\nExpira: ${loginResult.expiresAt}"
                             } else {
+                                isAuthenticated = false
                                 statusMessage = "Error inesperado: respuesta vacia"
                             }
                         } else {
+                            isAuthenticated = false
                             statusMessage =
                                 result.exceptionOrNull()?.message ?: "Error desconocido"
                         }
@@ -230,7 +296,7 @@ private fun MainScreen(
                 }
             },
             modifier = Modifier.fillMaxWidth(),
-            enabled = !isLoading
+            enabled = !isLoading && !isCheckingSession
         ) {
             Text("Iniciar sesion")
         }
@@ -247,14 +313,20 @@ private fun MainScreen(
 
                     withContext(Dispatchers.Main) {
                         isMeLoading = false
-                        meMessage = result.getOrElse { exception ->
-                            exception.message ?: "Error desconocido"
+
+                        if (result.isSuccess) {
+                            meMessage = result.getOrDefault("GET /me OK")
+                        } else {
+                            val errorMessage =
+                                result.exceptionOrNull()?.message ?: "Error desconocido"
+                            meMessage = errorMessage
+                            handleProtectedFailure(errorMessage)
                         }
                     }
                 }
             },
             modifier = Modifier.fillMaxWidth(),
-            enabled = !isMeLoading
+            enabled = isAuthenticated && !isMeLoading && !isCheckingSession
         ) {
             Text("Probar /me")
         }
@@ -280,20 +352,23 @@ private fun MainScreen(
                             }
                         } else {
                             chats = emptyList()
-                            chatsMessage = result.exceptionOrNull()?.message ?: "Error desconocido"
+                            val errorMessage =
+                                result.exceptionOrNull()?.message ?: "Error desconocido"
+                            chatsMessage = errorMessage
+                            handleProtectedFailure(errorMessage)
                         }
                     }
                 }
             },
             modifier = Modifier.fillMaxWidth(),
-            enabled = !isChatsLoading
+            enabled = isAuthenticated && !isChatsLoading && !isCheckingSession
         ) {
             Text("Listar chats")
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (chats.isNotEmpty()) {
+        if (isAuthenticated && chats.isNotEmpty()) {
             Text(
                 text = "Chats disponibles",
                 style = MaterialTheme.typography.titleMedium
@@ -327,21 +402,30 @@ private fun MainScreen(
 
                     withContext(Dispatchers.Main) {
                         isLogoutLoading = false
-                        logoutMessage = result.getOrElse { exception ->
-                            exception.message ?: "Error desconocido"
+
+                        if (result.isSuccess) {
+                            isAuthenticated = false
+                            resetProtectedUi()
+                            logoutMessage = result.getOrDefault("Logout OK")
+                            statusMessage = "Sesion cerrada correctamente."
+                        } else {
+                            val errorMessage =
+                                result.exceptionOrNull()?.message ?: "Error desconocido"
+                            logoutMessage = errorMessage
+                            handleProtectedFailure(errorMessage)
                         }
                     }
                 }
             },
             modifier = Modifier.fillMaxWidth(),
-            enabled = !isLogoutLoading
+            enabled = isAuthenticated && !isLogoutLoading && !isCheckingSession
         ) {
             Text("Cerrar sesion")
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (isLoading) {
+        if (isCheckingSession || isLoading) {
             CircularProgressIndicator()
             Spacer(modifier = Modifier.height(16.dp))
         }
@@ -394,6 +478,7 @@ private fun ChatScreen(
     context: Context,
     chat: ChatSummary,
     onBack: () -> Unit,
+    onSessionExpired: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var messagesMessage by remember { mutableStateOf("") }
@@ -403,6 +488,11 @@ private fun ChatScreen(
     var isMessagesLoading by remember { mutableStateOf(false) }
     var isSendMessageLoading by remember { mutableStateOf(false) }
     val messagesListState = rememberLazyListState()
+
+    fun expireSessionAndReturn() {
+        clearToken(context)
+        onSessionExpired()
+    }
 
     fun loadMessages() {
         isMessagesLoading = true
@@ -420,8 +510,13 @@ private fun ChatScreen(
                     chatMessages = result.getOrDefault(emptyList())
                     messagesMessage = ""
                 } else {
-                    messagesMessage =
+                    val errorMessage =
                         result.exceptionOrNull()?.message ?: "Error desconocido"
+                    messagesMessage = errorMessage
+
+                    if (isAuthErrorMessage(errorMessage)) {
+                        expireSessionAndReturn()
+                    }
                 }
             }
         }
@@ -587,11 +682,19 @@ private fun ChatScreen(
 
                             withContext(Dispatchers.Main) {
                                 isSendMessageLoading = false
-                                sendMessageResult = result.exceptionOrNull()?.message ?: ""
 
                                 if (result.isSuccess) {
                                     newMessageContent = ""
+                                    sendMessageResult = ""
                                     loadMessages()
+                                } else {
+                                    val errorMessage =
+                                        result.exceptionOrNull()?.message ?: "Error desconocido"
+                                    sendMessageResult = errorMessage
+
+                                    if (isAuthErrorMessage(errorMessage)) {
+                                        expireSessionAndReturn()
+                                    }
                                 }
                             }
                         }
@@ -622,6 +725,14 @@ private enum class AppScreen {
 
 private data class LoginResult(
     val accessToken: String,
+    val expiresAt: String
+)
+
+private data class SessionInfo(
+    val userId: Int,
+    val username: String,
+    val deviceUuid: String,
+    val deviceName: String,
     val expiresAt: String
 )
 
@@ -751,6 +862,18 @@ private fun clearToken(context: Context) {
         .apply()
 }
 
+private fun isAuthErrorMessage(message: String?): Boolean {
+    if (message.isNullOrBlank()) return false
+
+    val normalized = message.lowercase()
+
+    return normalized.contains("http 401") ||
+            normalized.contains("missing bearer token") ||
+            normalized.contains("token revoked") ||
+            normalized.contains("token expired") ||
+            normalized.contains("invalid authorization header")
+}
+
 private fun loginRequest(
     context: Context,
     username: String,
@@ -807,6 +930,53 @@ private fun loginRequest(
         }
     } catch (e: Exception) {
         Result.failure(Exception("Fallo en login: ${e.message}", e))
+    }
+}
+
+private fun restoreSessionRequest(context: Context): Result<SessionInfo> {
+    return try {
+        val accessToken = getSavedToken(context)
+
+        if (accessToken.isNullOrBlank()) {
+            return Result.failure(Exception("No hay token guardado."))
+        }
+
+        val url = URL("http://10.0.2.2:8000/me")
+        val connection = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 5000
+            readTimeout = 5000
+            setRequestProperty("Authorization", "Bearer $accessToken")
+        }
+
+        val responseCode = connection.responseCode
+
+        val responseText = if (responseCode in 200..299) {
+            connection.inputStream.bufferedReader().use(BufferedReader::readText)
+        } else {
+            connection.errorStream?.bufferedReader()?.use(BufferedReader::readText)
+                ?: "Error HTTP $responseCode"
+        }
+
+        if (responseCode in 200..299) {
+            val jsonResponse = JSONObject(responseText)
+
+            Result.success(
+                SessionInfo(
+                    userId = jsonResponse.optInt("user_id", 0),
+                    username = jsonResponse.optString("username", "Sin usuario"),
+                    deviceUuid = jsonResponse.optString("device_uuid", "Sin device_uuid"),
+                    deviceName = jsonResponse.optString("device_name", "Sin nombre"),
+                    expiresAt = jsonResponse.optString("expires_at", "Sin fecha")
+                )
+            )
+        } else {
+            clearToken(context)
+            Result.failure(Exception("HTTP $responseCode: $responseText"))
+        }
+    } catch (e: Exception) {
+        clearToken(context)
+        Result.failure(Exception("Fallo restaurando sesion: ${e.message}", e))
     }
 }
 
@@ -1044,6 +1214,7 @@ private fun logoutRequest(context: Context): Result<String> {
         val accessToken = getSavedToken(context)
 
         if (accessToken.isNullOrBlank()) {
+            clearToken(context)
             return Result.failure(Exception("No hay token guardado. No hay sesion que cerrar."))
         }
 
