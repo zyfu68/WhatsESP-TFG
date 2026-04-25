@@ -90,6 +90,9 @@ class MainActivity : ComponentActivity() {
                                     selectedChat = chat
                                     currentScreen = AppScreen.Chat
                                 },
+                                onOpenSettings = {
+                                    currentScreen = AppScreen.Settings
+                                },
                                 onForceBackToMain = {
                                     selectedChat = null
                                     currentScreen = AppScreen.Main
@@ -114,19 +117,24 @@ class MainActivity : ComponentActivity() {
                                     modifier = Modifier.padding(innerPadding)
                                 )
                             } else {
-                                MainScreen(
-                                    context = this,
-                                    onOpenChat = { selected ->
-                                        selectedChat = selected
-                                        currentScreen = AppScreen.Chat
-                                    },
-                                    onForceBackToMain = {
-                                        selectedChat = null
-                                        currentScreen = AppScreen.Main
-                                    },
-                                    modifier = Modifier.padding(innerPadding)
-                                )
+                                currentScreen = AppScreen.Main
                             }
+                        }
+
+                        AppScreen.Settings -> {
+                            SettingsScreen(
+                                onBack = { currentScreen = AppScreen.Main },
+                                onOpenDevices = { currentScreen = AppScreen.Devices },
+                                modifier = Modifier.padding(innerPadding)
+                            )
+                        }
+
+                        AppScreen.Devices -> {
+                            DevicesScreen(
+                                context = this,
+                                onBack = { currentScreen = AppScreen.Settings },
+                                modifier = Modifier.padding(innerPadding)
+                            )
                         }
                     }
                 }
@@ -139,6 +147,7 @@ class MainActivity : ComponentActivity() {
 private fun MainScreen(
     context: Context,
     onOpenChat: (ChatSummary) -> Unit,
+    onOpenSettings: () -> Unit,
     onForceBackToMain: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -151,6 +160,11 @@ private fun MainScreen(
     var emergencyMessage by remember { mutableStateOf("Resultado de emergencia pendiente") }
     var logoutMessage by remember { mutableStateOf("Resultado de logout pendiente") }
     var chats by remember { mutableStateOf<List<ChatSummary>>(emptyList()) }
+
+    var showCreateChat by remember { mutableStateOf(false) }
+    var newChatUsername by remember { mutableStateOf("") }
+    var createChatMessage by remember { mutableStateOf("") }
+    var isCreatingChat by remember { mutableStateOf(false) }
 
     var latestEmergencyAlert by remember { mutableStateOf<EmergencyEvent?>(null) }
     var lastSeenEmergencyId by remember { mutableLongStateOf(0L) }
@@ -296,37 +310,141 @@ private fun MainScreen(
                             text = "Tus chats",
                             style = MaterialTheme.typography.titleMedium
                         )
-                    }
 
-                    Button(
-                        onClick = {
-                            isLogoutLoading = true
-                            logoutMessage = "Cerrando sesion..."
+                        Spacer(modifier = Modifier.height(8.dp))
 
-                            CoroutineScope(Dispatchers.IO).launch {
-                                val result = logoutRequest(context = context)
+                        Button(
+                            onClick = { showCreateChat = true },
+                            shape = RoundedCornerShape(20.dp)
+                        ) {
+                            Text("Nuevo chat")
+                        }
 
-                                withContext(Dispatchers.Main) {
-                                    isLogoutLoading = false
+                        if (showCreateChat) {
+                            Spacer(modifier = Modifier.height(12.dp))
 
-                                    if (result.isSuccess) {
-                                        isAuthenticated = false
-                                        resetProtectedUi()
-                                        logoutMessage = result.getOrDefault("Logout OK")
-                                        statusMessage = "Sesion cerrada correctamente."
-                                    } else {
-                                        val errorMessage =
-                                            result.exceptionOrNull()?.message ?: "Error desconocido"
-                                        logoutMessage = errorMessage
-                                        handleProtectedFailure(errorMessage)
-                                    }
+                            OutlinedTextField(
+                                value = newChatUsername,
+                                onValueChange = { newChatUsername = it },
+                                label = { Text("Usuario") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Row {
+                                Button(
+                                    onClick = {
+                                        val usernameToCreate = newChatUsername.trim()
+
+                                        if (usernameToCreate.isBlank()) {
+                                            createChatMessage = "Introduce un usuario."
+                                        } else {
+                                            isCreatingChat = true
+                                            createChatMessage = "Creando chat..."
+
+                                            CoroutineScope(Dispatchers.IO).launch {
+                                                val result = createDmRequest(
+                                                    context = context,
+                                                    otherUsername = usernameToCreate
+                                                )
+
+                                                withContext(Dispatchers.Main) {
+                                                    isCreatingChat = false
+
+                                                    if (result.isSuccess) {
+                                                        val createdChat = result.getOrNull()
+
+                                                        createChatMessage = if (createdChat?.created == true) {
+                                                            "Chat creado con ${createdChat.otherUsername}."
+                                                        } else {
+                                                            "Chat ya existente con ${createdChat?.otherUsername}."
+                                                        }
+
+                                                        newChatUsername = ""
+                                                        showCreateChat = false
+                                                        loadChats()
+                                                    } else {
+                                                        createChatMessage =
+                                                            result.exceptionOrNull()?.message ?: "Error desconocido."
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                    enabled = !isCreatingChat
+                                ) {
+                                    Text(if (isCreatingChat) "..." else "Crear")
+                                }
+
+                                Spacer(modifier = Modifier.width(8.dp))
+
+                                Button(
+                                    onClick = {
+                                        showCreateChat = false
+                                        newChatUsername = ""
+                                        createChatMessage = ""
+                                    },
+                                    enabled = !isCreatingChat
+                                ) {
+                                    Text("Cancelar")
                                 }
                             }
-                        },
-                        enabled = !isLogoutLoading && !isCheckingSession,
-                        shape = RoundedCornerShape(20.dp)
+                        }
+
+                        if (createChatMessage.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            Text(
+                                text = createChatMessage,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+
+                    Column(
+                        horizontalAlignment = Alignment.End
                     ) {
-                        Text("Cerrar sesión")
+                        Button(
+                            onClick = onOpenSettings,
+                            shape = RoundedCornerShape(20.dp)
+                        ) {
+                            Text("Ajustes")
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Button(
+                            onClick = {
+                                isLogoutLoading = true
+                                logoutMessage = "Cerrando sesion..."
+
+                                CoroutineScope(Dispatchers.IO).launch {
+                                    val result = logoutRequest(context = context)
+
+                                    withContext(Dispatchers.Main) {
+                                        isLogoutLoading = false
+
+                                        if (result.isSuccess) {
+                                            isAuthenticated = false
+                                            resetProtectedUi()
+                                            logoutMessage = result.getOrDefault("Logout OK")
+                                            statusMessage = "Sesion cerrada correctamente."
+                                        } else {
+                                            val errorMessage =
+                                                result.exceptionOrNull()?.message ?: "Error desconocido"
+                                            logoutMessage = errorMessage
+                                            handleProtectedFailure(errorMessage)
+                                        }
+                                    }
+                                }
+                            },
+                            enabled = !isLogoutLoading && !isCheckingSession,
+                            shape = RoundedCornerShape(20.dp)
+                        ) {
+                            Text("Cerrar sesión")
+                        }
                     }
                 }
 
@@ -537,6 +655,242 @@ private fun MainScreen(
 }
 
 @Composable
+private fun SettingsScreen(
+    onBack: () -> Unit,
+    onOpenDevices: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(24.dp)
+    ) {
+        Text(
+            text = "Configuración",
+            style = MaterialTheme.typography.headlineMedium
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "Opciones de seguridad y ajustes de la aplicación.",
+            style = MaterialTheme.typography.bodyMedium
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Button(
+            onClick = onOpenDevices,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Mis dispositivos")
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(
+            onClick = onBack,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Volver")
+        }
+    }
+}
+
+@Composable
+private fun DevicesScreen(
+    context: Context,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var devices by remember { mutableStateOf<List<DeviceInfo>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    var isRevoking by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf("Cargando dispositivos...") }
+
+    fun loadDevices() {
+        isLoading = true
+        message = "Cargando dispositivos..."
+
+        CoroutineScope(Dispatchers.IO).launch {
+            val result = devicesRequest(context)
+
+            withContext(Dispatchers.Main) {
+                if (result.isSuccess) {
+                    devices = result.getOrDefault(emptyList())
+                    message = if (devices.isEmpty()) {
+                        "No hay dispositivos registrados."
+                    } else {
+                        "Dispositivos cargados correctamente."
+                    }
+                } else {
+                    message = result.exceptionOrNull()?.message ?: "Error desconocido"
+                }
+
+                isLoading = false
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        loadDevices()
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(24.dp)
+    ) {
+        Text(
+            text = "Mis dispositivos",
+            style = MaterialTheme.typography.headlineMedium
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "Consulta y revocación de dispositivos asociados a la cuenta.",
+            style = MaterialTheme.typography.bodyMedium
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        if (isLoading || isRevoking) {
+            CircularProgressIndicator()
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodyMedium
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            items(devices) { device ->
+                DeviceListItem(
+                    device = device,
+                    isRevoking = isRevoking,
+                    onRevoke = {
+                        isRevoking = true
+                        message = "Revocando dispositivo ${device.id}..."
+
+                        CoroutineScope(Dispatchers.IO).launch {
+                            val result = revokeDeviceRequest(
+                                context = context,
+                                deviceId = device.id
+                            )
+
+                            withContext(Dispatchers.Main) {
+                                isRevoking = false
+
+                                if (result.isSuccess) {
+                                    message = result.getOrDefault("Dispositivo revocado correctamente.")
+                                    devices = devices.filter { it.id != device.id }
+                                } else {
+                                    message =
+                                        result.exceptionOrNull()?.message ?: "Error desconocido"
+                                }
+                            }
+                        }
+                    }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(
+            onClick = onBack,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Volver")
+        }
+    }
+}
+
+@Composable
+private fun DeviceListItem(
+    device: DeviceInfo,
+    isRevoking: Boolean,
+    onRevoke: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        tonalElevation = 2.dp,
+        color = MaterialTheme.colorScheme.surfaceVariant
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 16.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = device.deviceName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+
+                if (device.isCurrent) {
+                    Text(
+                        text = "Actual",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF1B5E20)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = "ID dispositivo: ${device.id}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+            )
+
+            Text(
+                text = "UUID: ${device.deviceUuid}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+            )
+
+            Text(
+                text = "Último uso: ${device.lastSeenAt}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+            )
+
+            if (!device.isCurrent) {
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(
+                    onClick = onRevoke,
+                    enabled = !isRevoking,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFB3261E),
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text("Revocar")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ChatListItem(
     chat: ChatSummary,
     onClick: () -> Unit
@@ -572,7 +926,10 @@ private fun ChatListItem(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = chat.lastMessagePreview,
+                text = if (chat.lastMessagePreview == "null" || chat.lastMessagePreview.isBlank())
+                    "Sin mensajes aún"
+                else
+                    chat.lastMessagePreview,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.95f)
             )
@@ -626,34 +983,13 @@ private fun EmergencyAlertCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Text(
-                text = "Evento: ${emergency.id}",
-                color = Color.White
-            )
-            Text(
-                text = "Usuario: ${emergency.userId}",
-                color = Color.White
-            )
-            Text(
-                text = "Dispositivo: ${emergency.deviceId}",
-                color = Color.White
-            )
-            Text(
-                text = "Latitud: ${emergency.latitude}",
-                color = Color.White
-            )
-            Text(
-                text = "Longitud: ${emergency.longitude}",
-                color = Color.White
-            )
-            Text(
-                text = "Nota: ${emergency.note}",
-                color = Color.White
-            )
-            Text(
-                text = "Fecha: ${emergency.createdAt}",
-                color = Color.White
-            )
+            Text(text = "Evento: ${emergency.id}", color = Color.White)
+            Text(text = "Usuario: ${emergency.userId}", color = Color.White)
+            Text(text = "Dispositivo: ${emergency.deviceId}", color = Color.White)
+            Text(text = "Latitud: ${emergency.latitude}", color = Color.White)
+            Text(text = "Longitud: ${emergency.longitude}", color = Color.White)
+            Text(text = "Nota: ${emergency.note}", color = Color.White)
+            Text(text = "Fecha: ${emergency.createdAt}", color = Color.White)
 
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -965,7 +1301,9 @@ private fun ChatScreen(
 
 private enum class AppScreen {
     Main,
-    Chat
+    Chat,
+    Settings,
+    Devices
 }
 
 private data class LoginResult(
@@ -979,6 +1317,13 @@ private data class SessionInfo(
     val deviceUuid: String,
     val deviceName: String,
     val expiresAt: String
+)
+
+
+private data class DMCreateResult(
+    val chatId: Int,
+    val created: Boolean,
+    val otherUsername: String
 )
 
 private data class ChatSummary(
@@ -1002,6 +1347,16 @@ private data class EmergencyEvent(
     val note: String,
     val createdAt: String
 )
+
+private data class DeviceInfo(
+    val id: Int,
+    val deviceUuid: String,
+    val deviceName: String,
+    val lastSeenAt: String,
+    val isCurrent: Boolean
+)
+
+
 
 @Composable
 private fun MessageItem(message: ChatMessage) {
@@ -1263,51 +1618,215 @@ private fun chatsRequest(context: Context): Result<List<ChatSummary>> {
         }
 
         if (responseCode in 200..299) {
-            try {
-                val trimmedResponse = responseText.trim()
+            val trimmedResponse = responseText.trim()
 
-                val chatsArray = when {
-                    trimmedResponse.startsWith("{") -> {
-                        val jsonResponse = JSONObject(trimmedResponse)
-                        jsonResponse.getJSONArray("value")
-                    }
-                    trimmedResponse.startsWith("[") -> {
-                        JSONArray(trimmedResponse)
-                    }
-                    else -> {
-                        return Result.failure(
-                            Exception("Respuesta inesperada de /chats:\n$responseText")
-                        )
-                    }
+            val chatsArray = when {
+                trimmedResponse.startsWith("{") -> {
+                    val jsonResponse = JSONObject(trimmedResponse)
+                    jsonResponse.getJSONArray("value")
                 }
 
-                val chats = mutableListOf<ChatSummary>()
+                trimmedResponse.startsWith("[") -> {
+                    JSONArray(trimmedResponse)
+                }
 
-                for (index in 0 until chatsArray.length()) {
-                    val chat = chatsArray.getJSONObject(index)
-                    val chatId = chat.optInt("chat_id")
-                    val otherUsername = chat.optString("other_username", "Sin usuario")
-                    val lastMessagePreview =
-                        chat.optString("last_message_preview", "Sin mensajes")
-
-                    chats.add(
-                        ChatSummary(
-                            chatId = chatId,
-                            otherUsername = otherUsername,
-                            lastMessagePreview = lastMessagePreview
-                        )
+                else -> {
+                    return Result.failure(
+                        Exception("Respuesta inesperada de /chats:\n$responseText")
                     )
                 }
-
-                Result.success(chats)
-            } catch (e: Exception) {
-                Result.failure(Exception("Error parseando /chats: ${e.message}\n$responseText"))
             }
+
+            val chats = mutableListOf<ChatSummary>()
+
+            for (index in 0 until chatsArray.length()) {
+                val chat = chatsArray.getJSONObject(index)
+                val chatId = chat.optInt("chat_id")
+                val otherUsername = chat.optString("other_username", "Sin usuario")
+                val lastMessagePreview =
+                    chat.optString("last_message_preview", "Sin mensajes")
+
+                chats.add(
+                    ChatSummary(
+                        chatId = chatId,
+                        otherUsername = otherUsername,
+                        lastMessagePreview = lastMessagePreview
+                    )
+                )
+            }
+
+            Result.success(chats)
         } else {
             Result.failure(Exception("HTTP $responseCode: $responseText"))
         }
     } catch (e: Exception) {
         Result.failure(Exception("Fallo en /chats: ${e.message}", e))
+    }
+}
+
+private fun createDmRequest(
+    context: Context,
+    otherUsername: String
+): Result<DMCreateResult> {
+    return try {
+        val accessToken = getSavedToken(context)
+
+        if (accessToken.isNullOrBlank()) {
+            return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
+        }
+
+        val url = URL("http://10.0.2.2:8000/chats/dm")
+        val connection = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 5000
+            readTimeout = 5000
+            doOutput = true
+            setRequestProperty("Authorization", "Bearer $accessToken")
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+        }
+
+        val jsonBody = JSONObject().apply {
+            put("other_username", otherUsername)
+        }
+
+        OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
+            writer.write(jsonBody.toString())
+            writer.flush()
+        }
+
+        val responseCode = connection.responseCode
+
+        val responseText = if (responseCode in 200..299) {
+            connection.inputStream.bufferedReader().use(BufferedReader::readText)
+        } else {
+            connection.errorStream?.bufferedReader()?.use(BufferedReader::readText)
+                ?: "Error HTTP $responseCode"
+        }
+
+        if (responseCode in 200..299) {
+            val json = JSONObject(responseText)
+
+            Result.success(
+                DMCreateResult(
+                    chatId = json.getInt("chat_id"),
+                    created = json.getBoolean("created"),
+                    otherUsername = json.getString("other_username")
+                )
+            )
+        } else {
+            Result.failure(Exception("HTTP $responseCode: $responseText"))
+        }
+    } catch (e: Exception) {
+        Result.failure(Exception("Fallo en crear chat: ${e.message}", e))
+    }
+}
+private fun devicesRequest(context: Context): Result<List<DeviceInfo>> {
+    return try {
+        val accessToken = getSavedToken(context)
+
+        if (accessToken.isNullOrBlank()) {
+            return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
+        }
+
+        val url = URL("http://10.0.2.2:8000/devices")
+        val connection = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 5000
+            readTimeout = 5000
+            setRequestProperty("Authorization", "Bearer $accessToken")
+        }
+
+        val responseCode = connection.responseCode
+
+        val responseText = if (responseCode in 200..299) {
+            connection.inputStream.bufferedReader().use(BufferedReader::readText)
+        } else {
+            connection.errorStream?.bufferedReader()?.use(BufferedReader::readText)
+                ?: "Error HTTP $responseCode"
+        }
+
+        if (responseCode in 200..299) {
+            val trimmedResponse = responseText.trim()
+
+            val devicesArray = when {
+                trimmedResponse.startsWith("{") -> {
+                    val jsonResponse = JSONObject(trimmedResponse)
+                    jsonResponse.getJSONArray("value")
+                }
+
+                trimmedResponse.startsWith("[") -> {
+                    JSONArray(trimmedResponse)
+                }
+
+                else -> {
+                    return Result.failure(
+                        Exception("Respuesta inesperada de /devices:\n$responseText")
+                    )
+                }
+            }
+
+            val devices = mutableListOf<DeviceInfo>()
+
+            for (index in 0 until devicesArray.length()) {
+                val device = devicesArray.getJSONObject(index)
+
+                devices.add(
+                    DeviceInfo(
+                        id = device.optInt("id"),
+                        deviceUuid = device.optString("device_uuid", "Sin UUID"),
+                        deviceName = device.optString("device_name", "Sin nombre"),
+                        lastSeenAt = device.optString("last_seen_at", "Sin fecha"),
+                        isCurrent = device.optBoolean("is_current", false)
+                    )
+                )
+            }
+
+            Result.success(devices)
+        } else {
+            Result.failure(Exception("HTTP $responseCode: $responseText"))
+        }
+    } catch (e: Exception) {
+        Result.failure(Exception("Fallo en /devices: ${e.message}", e))
+    }
+}
+
+private fun revokeDeviceRequest(context: Context, deviceId: Int): Result<String> {
+    return try {
+        val accessToken = getSavedToken(context)
+
+        if (accessToken.isNullOrBlank()) {
+            return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
+        }
+
+        val url = URL("http://10.0.2.2:8000/devices/$deviceId/revoke")
+        val connection = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 5000
+            readTimeout = 5000
+            setRequestProperty("Authorization", "Bearer $accessToken")
+        }
+
+        val responseCode = connection.responseCode
+
+        val responseText = if (responseCode in 200..299) {
+            connection.inputStream.bufferedReader().use(BufferedReader::readText)
+        } else {
+            connection.errorStream?.bufferedReader()?.use(BufferedReader::readText)
+                ?: "Error HTTP $responseCode"
+        }
+
+        if (responseCode in 200..299) {
+            val jsonResponse = JSONObject(responseText)
+            val revokedTokens = jsonResponse.optInt("revoked_tokens", 0)
+
+            Result.success(
+                "Dispositivo $deviceId revocado correctamente.\nTokens revocados: $revokedTokens"
+            )
+        } else {
+            Result.failure(Exception("HTTP $responseCode: $responseText"))
+        }
+    } catch (e: Exception) {
+        Result.failure(Exception("Fallo revocando dispositivo: ${e.message}", e))
     }
 }
 
@@ -1337,32 +1856,26 @@ private fun messagesRequest(context: Context, chatId: Int): Result<List<ChatMess
         }
 
         if (responseCode in 200..299) {
-            try {
-                val jsonResponse = JSONObject(responseText)
-                val messagesArray = jsonResponse.getJSONArray("items")
-                val messages = mutableListOf<ChatMessage>()
+            val jsonResponse = JSONObject(responseText)
+            val messagesArray = jsonResponse.getJSONArray("items")
+            val messages = mutableListOf<ChatMessage>()
 
-                for (index in 0 until messagesArray.length()) {
-                    val message = messagesArray.getJSONObject(index)
-                    val content = message.optString("content", "Sin contenido")
-                    val createdAt = message.optString("created_at", "Sin fecha")
-                    val senderUserId = message.optInt("sender_user_id", 0)
+            for (index in 0 until messagesArray.length()) {
+                val message = messagesArray.getJSONObject(index)
+                val content = message.optString("content", "Sin contenido")
+                val createdAt = message.optString("created_at", "Sin fecha")
+                val senderUserId = message.optInt("sender_user_id", 0)
 
-                    messages.add(
-                        ChatMessage(
-                            content = content,
-                            createdAt = createdAt,
-                            senderUserId = senderUserId
-                        )
+                messages.add(
+                    ChatMessage(
+                        content = content,
+                        createdAt = createdAt,
+                        senderUserId = senderUserId
                     )
-                }
-
-                Result.success(messages)
-            } catch (e: Exception) {
-                Result.failure(
-                    Exception("Error parseando /chats/$chatId/messages: ${e.message}\n$responseText")
                 )
             }
+
+            Result.success(messages)
         } else {
             Result.failure(Exception("HTTP $responseCode: $responseText"))
         }
@@ -1408,21 +1921,15 @@ private fun sendMessageRequest(context: Context, chatId: Int, content: String): 
         }
 
         if (responseCode in 200..299) {
-            try {
-                val jsonResponse = JSONObject(responseText)
-                val messageContent = jsonResponse.optString("content", "Sin contenido")
-                val createdAt = jsonResponse.optString("created_at", "Sin fecha")
+            val jsonResponse = JSONObject(responseText)
+            val messageContent = jsonResponse.optString("content", "Sin contenido")
+            val createdAt = jsonResponse.optString("created_at", "Sin fecha")
 
-                Result.success(
-                    "Mensaje enviado correctamente." +
-                            "\nContenido: $messageContent" +
-                            "\nFecha: $createdAt"
-                )
-            } catch (e: Exception) {
-                Result.failure(
-                    Exception("Error parseando envio de mensaje: ${e.message}\n$responseText")
-                )
-            }
+            Result.success(
+                "Mensaje enviado correctamente." +
+                        "\nContenido: $messageContent" +
+                        "\nFecha: $createdAt"
+            )
         } else {
             Result.failure(Exception("HTTP $responseCode: $responseText"))
         }
@@ -1475,25 +1982,19 @@ private fun emergencyRequest(
         }
 
         if (responseCode in 200..299) {
-            try {
-                val jsonResponse = JSONObject(responseText)
-                val eventId = jsonResponse.optInt("event_id", 0)
-                val createdAt = jsonResponse.optString("created_at", "Sin fecha")
-                val savedLatitude = jsonResponse.optString("latitude", latitude.toString())
-                val savedLongitude = jsonResponse.optString("longitude", longitude.toString())
+            val jsonResponse = JSONObject(responseText)
+            val eventId = jsonResponse.optInt("event_id", 0)
+            val createdAt = jsonResponse.optString("created_at", "Sin fecha")
+            val savedLatitude = jsonResponse.optString("latitude", latitude.toString())
+            val savedLongitude = jsonResponse.optString("longitude", longitude.toString())
 
-                Result.success(
-                    "Emergencia enviada correctamente." +
-                            "\nEvento: $eventId" +
-                            "\nLatitud: $savedLatitude" +
-                            "\nLongitud: $savedLongitude" +
-                            "\nFecha: $createdAt"
-                )
-            } catch (e: Exception) {
-                Result.failure(
-                    Exception("Error parseando /emergency: ${e.message}\n$responseText")
-                )
-            }
+            Result.success(
+                "Emergencia enviada correctamente." +
+                        "\nEvento: $eventId" +
+                        "\nLatitud: $savedLatitude" +
+                        "\nLongitud: $savedLongitude" +
+                        "\nFecha: $createdAt"
+            )
         } else {
             Result.failure(Exception("HTTP $responseCode: $responseText"))
         }
