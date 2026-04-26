@@ -1,6 +1,10 @@
 package com.whatesp
 
+import android.annotation.SuppressLint
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.location.Location
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -52,10 +56,15 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationServices
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -64,11 +73,13 @@ import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
+import kotlin.coroutines.resume
 
 private const val PREFS_NAME = "whatesp_prefs"
 private const val KEY_DEVICE_UUID = "device_uuid"
 private const val KEY_ACCESS_TOKEN = "access_token"
 private const val KEY_EXPIRES_AT = "expires_at"
+private const val LOCATION_PERMISSION_REQUEST_CODE = 1001
 
 class MainActivity : ComponentActivity() {
 
@@ -625,14 +636,32 @@ private fun MainScreen(
                 .padding(bottom = 24.dp),
             enabled = !isEmergencyLoading
         ) {
+            if (!hasLocationPermission(context)) {
+                val activity = context as ComponentActivity
+                requestLocationPermission(activity)
+                emergencyMessage = "Permiso de ubicacion requerido."
+                return@EmergencyBottomButton
+            }
+
             isEmergencyLoading = true
             emergencyMessage = "Enviando evento de emergencia..."
 
             CoroutineScope(Dispatchers.IO).launch {
+                val location = getLastKnownDeviceLocation(context)
+
+                if (location == null) {
+                    withContext(Dispatchers.Main) {
+                        isEmergencyLoading = false
+                        emergencyMessage =
+                            "No se ha podido obtener la ubicación. Activa la ubicación del dispositivo e inténtalo de nuevo."
+                    }
+                    return@launch
+                }
+
                 val result = emergencyRequest(
                     context = context,
-                    latitude = 41.6561,
-                    longitude = -0.8773,
+                    latitude = location.latitude,
+                    longitude = location.longitude,
                     note = "Prueba emergencia desde Android"
                 )
 
@@ -1267,14 +1296,32 @@ private fun ChatScreen(
                 .padding(bottom = 24.dp),
             enabled = !isEmergencyLoading
         ) {
+            if (!hasLocationPermission(context)) {
+                val activity = context as ComponentActivity
+                requestLocationPermission(activity)
+                emergencyMessage = "Permiso de ubicacion requerido."
+                return@EmergencyBottomButton
+            }
+
             isEmergencyLoading = true
             emergencyMessage = "Enviando evento de emergencia..."
 
             CoroutineScope(Dispatchers.IO).launch {
+                val location = getLastKnownDeviceLocation(context)
+
+                if (location == null) {
+                    withContext(Dispatchers.Main) {
+                        isEmergencyLoading = false
+                        emergencyMessage =
+                            "No se ha podido obtener la ubicación. Activa la ubicación del dispositivo e inténtalo de nuevo."
+                    }
+                    return@launch
+                }
+
                 val result = emergencyRequest(
                     context = context,
-                    latitude = 41.6561,
-                    longitude = -0.8773,
+                    latitude = location.latitude,
+                    longitude = location.longitude,
                     note = "Prueba emergencia desde Android"
                 )
 
@@ -1319,7 +1366,6 @@ private data class SessionInfo(
     val expiresAt: String
 )
 
-
 private data class DMCreateResult(
     val chatId: Int,
     val created: Boolean,
@@ -1355,8 +1401,6 @@ private data class DeviceInfo(
     val lastSeenAt: String,
     val isCurrent: Boolean
 )
-
-
 
 @Composable
 private fun MessageItem(message: ChatMessage) {
@@ -1431,6 +1475,61 @@ private fun formatMessageTime(createdAt: String): String {
         }
     } catch (e: Exception) {
         createdAt
+    }
+}
+
+private fun hasLocationPermission(context: Context): Boolean {
+    val hasFineLocation = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_FINE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED
+    val hasCoarseLocation = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.ACCESS_COARSE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED
+
+    return hasFineLocation || hasCoarseLocation
+}
+
+private fun requestLocationPermission(activity: ComponentActivity) {
+    ActivityCompat.requestPermissions(
+        activity,
+        arrayOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        ),
+        LOCATION_PERMISSION_REQUEST_CODE
+    )
+}
+
+private fun getFusedLocationProviderClient(context: Context): FusedLocationProviderClient {
+    return LocationServices.getFusedLocationProviderClient(context)
+}
+
+@SuppressLint("MissingPermission")
+private suspend fun getLastKnownDeviceLocation(context: Context): Location? {
+    if (!hasLocationPermission(context)) {
+        return null
+    }
+
+    val fusedLocationClient = getFusedLocationProviderClient(context)
+
+    return suspendCancellableCoroutine { continuation ->
+        fusedLocationClient.lastLocation
+            .addOnSuccessListener { location ->
+                if (continuation.isActive) {
+                    continuation.resume(location)
+                }
+            }
+            .addOnFailureListener {
+                if (continuation.isActive) {
+                    continuation.resume(null)
+                }
+            }
+
+        continuation.invokeOnCancellation {
+            // No-op: lastLocation cannot be explicitly cancelled.
+        }
     }
 }
 
@@ -1720,6 +1819,7 @@ private fun createDmRequest(
         Result.failure(Exception("Fallo en crear chat: ${e.message}", e))
     }
 }
+
 private fun devicesRequest(context: Context): Result<List<DeviceInfo>> {
     return try {
         val accessToken = getSavedToken(context)
