@@ -91,6 +91,7 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 var currentScreen by remember { mutableStateOf(AppScreen.Main) }
                 var selectedChat by remember { mutableStateOf<ChatSummary?>(null) }
+                var selectedEmergency by remember { mutableStateOf<EmergencyEvent?>(null) }
 
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     when (currentScreen) {
@@ -100,6 +101,10 @@ class MainActivity : ComponentActivity() {
                                 onOpenChat = { chat ->
                                     selectedChat = chat
                                     currentScreen = AppScreen.Chat
+                                },
+                                onOpenEmergencyMap = { emergency ->
+                                    selectedEmergency = emergency
+                                    currentScreen = AppScreen.EmergencyMap
                                 },
                                 onOpenSettings = {
                                     currentScreen = AppScreen.Settings
@@ -147,6 +152,26 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier.padding(innerPadding)
                             )
                         }
+
+                        AppScreen.EmergencyMap -> {
+                            val emergency = selectedEmergency
+
+                            if (emergency != null) {
+                                EmergencyMapScreen(
+                                    context = this,
+                                    latitude = emergency.latitude.toDoubleOrNull() ?: 0.0,
+                                    longitude = emergency.longitude.toDoubleOrNull() ?: 0.0,
+                                    eventId = emergency.id,
+                                    onBack = {
+                                        selectedEmergency = null
+                                        currentScreen = AppScreen.Main
+                                    },
+                                    modifier = Modifier.padding(innerPadding)
+                                )
+                            } else {
+                                currentScreen = AppScreen.Main
+                            }
+                        }
                     }
                 }
             }
@@ -158,6 +183,7 @@ class MainActivity : ComponentActivity() {
 private fun MainScreen(
     context: Context,
     onOpenChat: (ChatSummary) -> Unit,
+    onOpenEmergencyMap: (EmergencyEvent) -> Unit,
     onOpenSettings: () -> Unit,
     onForceBackToMain: () -> Unit,
     modifier: Modifier = Modifier
@@ -464,6 +490,9 @@ private fun MainScreen(
                 if (latestEmergencyAlert != null) {
                     EmergencyAlertCard(
                         emergency = latestEmergencyAlert!!,
+                        onOpenMap = {
+                            onOpenEmergencyMap(latestEmergencyAlert!!)
+                        },
                         onDismiss = {
                             dismissedEmergencyId = latestEmergencyAlert?.id ?: 0L
                             latestEmergencyAlert = null
@@ -992,6 +1021,7 @@ private fun EmergencyBottomButton(
 @Composable
 private fun EmergencyAlertCard(
     emergency: EmergencyEvent,
+    onOpenMap: () -> Unit,
     onDismiss: () -> Unit
 ) {
     Surface(
@@ -1021,6 +1051,12 @@ private fun EmergencyAlertCard(
             Text(text = "Fecha: ${emergency.createdAt}", color = Color.White)
 
             Spacer(modifier = Modifier.height(12.dp))
+
+            Button(onClick = onOpenMap) {
+                Text("Ver en mapa")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             Button(onClick = onDismiss) {
                 Text("Cerrar alerta")
@@ -1350,7 +1386,8 @@ private enum class AppScreen {
     Main,
     Chat,
     Settings,
-    Devices
+    Devices,
+    EmergencyMap
 }
 
 private data class LoginResult(
