@@ -60,6 +60,8 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -74,6 +76,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
 import kotlin.coroutines.resume
+import androidx.compose.runtime.saveable.rememberSaveable
 
 private const val PREFS_NAME = "whatesp_prefs"
 private const val KEY_DEVICE_UUID = "device_uuid"
@@ -93,11 +96,161 @@ class MainActivity : ComponentActivity() {
                 var selectedChat by remember { mutableStateOf<ChatSummary?>(null) }
                 var selectedEmergency by remember { mutableStateOf<EmergencyEvent?>(null) }
 
+                var statusMessage by remember { mutableStateOf("Comprobando sesion guardada...") }
+                var chatsMessage by remember { mutableStateOf("Resultado de /chats pendiente") }
+                var chats by remember { mutableStateOf<List<ChatSummary>>(emptyList()) }
+                var latestEmergencyAlert by remember { mutableStateOf<EmergencyEvent?>(null) }
+                var lastSeenEmergencyId by remember { mutableLongStateOf(0L) }
+                var dismissedEmergencyId by remember { mutableLongStateOf(0L) }
+
+                var isAuthenticated by rememberSaveable { mutableStateOf(false) }
+                var isCheckingSession by remember { mutableStateOf(true) }
+                var isChatsLoading by remember { mutableStateOf(false) }
+
+                fun resetProtectedUi() {
+                    chats = emptyList()
+                    chatsMessage = "Resultado de /chats pendiente"
+                    latestEmergencyAlert = null
+                    selectedChat = null
+                    selectedEmergency = null
+                    currentScreen = AppScreen.Main
+                }
+
+                fun invalidateLocalSession(message: String) {
+                    clearToken(context = this)
+                    isAuthenticated = false
+                    statusMessage = message
+                    resetProtectedUi()
+                }
+
+                fun handleProtectedFailure(errorMessage: String) {
+                    if (isAuthErrorMessage(errorMessage)) {
+                        invalidateLocalSession("Sesion no valida o caducada. Inicia sesion de nuevo.")
+                    }
+                }
+
+                fun loadChats() {
+                    isChatsLoading = true
+                    chatsMessage = "Consultando /chats..."
+
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val result = chatsRequest(context = this@MainActivity)
+
+                        withContext(Dispatchers.Main) {
+                            isChatsLoading = false
+                            if (result.isSuccess) {
+                                chats = result.getOrDefault(emptyList())
+                                chatsMessage = if (chats.isEmpty()) {
+                                    "No hay chats disponibles."
+                                } else {
+                                    "Chats cargados correctamente."
+                                }
+                            } else {
+                                chats = emptyList()
+                                val errorMessage =
+                                    result.exceptionOrNull()?.message ?: "Error desconocido"
+                                chatsMessage = errorMessage
+                                handleProtectedFailure(errorMessage)
+                            }
+                        }
+                    }
+                }
+
+                LaunchedEffect(Unit) {
+                    val result = withContext(Dispatchers.IO) {
+                        restoreSessionRequest(this@MainActivity)
+                    }
+
+                    isCheckingSession = false
+
+                    if (result.isSuccess) {
+                        val session = result.getOrNull()
+
+                        if (session != null) {
+                            isAuthenticated = true
+                            statusMessage =
+                                "Sesion restaurada correctamente.\nUsuario: ${session.username}\nDispositivo: ${session.deviceName}\nExpira: ${session.expiresAt}"
+                            loadChats()
+                        } else {
+                            invalidateLocalSession("No hay sesion valida. Inicia sesion primero.")
+                        }
+                    } else {
+                        invalidateLocalSession("No hay sesion valida. Inicia sesion primero.")
+                    }
+                }
+
+                LaunchedEffect(isAuthenticated) {
+                    if (!isAuthenticated) return@LaunchedEffect
+
+                    while (isAuthenticated) {
+                        val result = withContext(Dispatchers.IO) {
+                            latestEmergencyRequest(this@MainActivity)
+                        }
+
+                        if (result.isSuccess) {
+                            val emergency = result.getOrNull()
+
+                            if (emergency != null) {
+                                if (lastSeenEmergencyId == 0L) {
+                                    lastSeenEmergencyId = emergency.id
+                                } else if (emergency.id != lastSeenEmergencyId) {
+                                    lastSeenEmergencyId = emergency.id
+
+                                    if (emergency.id != dismissedEmergencyId) {
+                                        latestEmergencyAlert = emergency
+                                    }
+                                }
+                            }
+                        } else {
+                            val errorMessage = result.exceptionOrNull()?.message ?: ""
+                            if (isAuthErrorMessage(errorMessage)) {
+                                invalidateLocalSession("Sesion no valida o caducada. Inicia sesion de nuevo.")
+                            }
+                        }
+
+                        delay(5000)
+                    }
+                }
+
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     when (currentScreen) {
                         AppScreen.Main -> {
                             MainScreen(
                                 context = this,
+                                isAuthenticated = isAuthenticated,
+                                isCheckingSession = isCheckingSession,
+                                statusMessage = statusMessage,
+                                chats = chats,
+                                chatsMessage = chatsMessage,
+                                isChatsLoading = isChatsLoading,
+                                latestEmergencyAlert = latestEmergencyAlert,
+                                onStatusMessageChange = { statusMessage = it },
+                                onLoginSuccess = { loginResult ->
+                                    saveToken(
+                                        context = this,
+                                        accessToken = loginResult.accessToken,
+                                        expiresAt = loginResult.expiresAt
+                                    )
+                                    isAuthenticated = true
+                                    statusMessage =
+                                        "Login OK. Sesion iniciada.\nExpira: ${loginResult.expiresAt}"
+                                    loadChats()
+                                },
+                                onLoginFailure = { message ->
+                                    isAuthenticated = false
+                                    statusMessage = message
+                                },
+                                onLogoutSuccess = { _ ->
+                                    isAuthenticated = false
+                                    resetProtectedUi()
+                                    statusMessage = "Sesion cerrada correctamente."
+                                },
+                                onProtectedFailure = { errorMessage ->
+                                    handleProtectedFailure(errorMessage)
+                                },
+                                onLoadChats = {
+                                    loadChats()
+                                },
                                 onOpenChat = { chat ->
                                     selectedChat = chat
                                     currentScreen = AppScreen.Chat
@@ -106,11 +259,16 @@ class MainActivity : ComponentActivity() {
                                     selectedEmergency = emergency
                                     currentScreen = AppScreen.EmergencyMap
                                 },
+                                onDismissEmergencyAlert = {
+                                    dismissedEmergencyId = latestEmergencyAlert?.id ?: 0L
+                                    latestEmergencyAlert = null
+                                },
                                 onOpenSettings = {
                                     currentScreen = AppScreen.Settings
                                 },
                                 onForceBackToMain = {
                                     selectedChat = null
+                                    selectedEmergency = null
                                     currentScreen = AppScreen.Main
                                 },
                                 modifier = Modifier.padding(innerPadding)
@@ -124,11 +282,12 @@ class MainActivity : ComponentActivity() {
                                 ChatScreen(
                                     context = this,
                                     chat = chat,
-                                    onBack = { currentScreen = AppScreen.Main },
-                                    onSessionExpired = {
-                                        clearToken(this)
+                                    onBack = {
                                         selectedChat = null
                                         currentScreen = AppScreen.Main
+                                    },
+                                    onSessionExpired = {
+                                        invalidateLocalSession("Sesion no valida o caducada. Inicia sesion de nuevo.")
                                     },
                                     modifier = Modifier.padding(innerPadding)
                                 )
@@ -182,143 +341,50 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun MainScreen(
     context: Context,
+    isAuthenticated: Boolean,
+    isCheckingSession: Boolean,
+    statusMessage: String,
+    chats: List<ChatSummary>,
+    chatsMessage: String,
+    isChatsLoading: Boolean,
+    latestEmergencyAlert: EmergencyEvent?,
+    onStatusMessageChange: (String) -> Unit,
+    onLoginSuccess: (LoginResult) -> Unit,
+    onLoginFailure: (String) -> Unit,
+    onLogoutSuccess: (String) -> Unit,
+    onProtectedFailure: (String) -> Unit,
+    onLoadChats: () -> Unit,
     onOpenChat: (ChatSummary) -> Unit,
     onOpenEmergencyMap: (EmergencyEvent) -> Unit,
+    onDismissEmergencyAlert: () -> Unit,
     onOpenSettings: () -> Unit,
     onForceBackToMain: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var username by remember { mutableStateOf("demo") }
-    var credential by remember { mutableStateOf("WESP_shared_dev_2026!") }
-    var deviceName by remember { mutableStateOf("Android Emulator") }
+    var username by remember { mutableStateOf("") }
+    var credential by remember { mutableStateOf("") }
+    var deviceName by remember { mutableStateOf("") }
 
-    var statusMessage by remember { mutableStateOf("Comprobando sesion guardada...") }
-    var chatsMessage by remember { mutableStateOf("Resultado de /chats pendiente") }
     var emergencyMessage by remember { mutableStateOf("Resultado de emergencia pendiente") }
     var logoutMessage by remember { mutableStateOf("Resultado de logout pendiente") }
-    var chats by remember { mutableStateOf<List<ChatSummary>>(emptyList()) }
 
     var showCreateChat by remember { mutableStateOf(false) }
     var newChatUsername by remember { mutableStateOf("") }
     var createChatMessage by remember { mutableStateOf("") }
     var isCreatingChat by remember { mutableStateOf(false) }
 
-    var latestEmergencyAlert by remember { mutableStateOf<EmergencyEvent?>(null) }
-    var lastSeenEmergencyId by remember { mutableLongStateOf(0L) }
-    var dismissedEmergencyId by remember { mutableLongStateOf(0L) }
-
-    var isAuthenticated by remember { mutableStateOf(false) }
-    var isCheckingSession by remember { mutableStateOf(true) }
     var isLoading by remember { mutableStateOf(false) }
-    var isChatsLoading by remember { mutableStateOf(false) }
     var isEmergencyLoading by remember { mutableStateOf(false) }
     var isLogoutLoading by remember { mutableStateOf(false) }
 
     fun resetProtectedUi() {
-        chats = emptyList()
-        chatsMessage = "Resultado de /chats pendiente"
         emergencyMessage = "Resultado de emergencia pendiente"
         logoutMessage = "Resultado de logout pendiente"
-        latestEmergencyAlert = null
         onForceBackToMain()
     }
 
-    fun invalidateLocalSession(message: String) {
-        clearToken(context)
-        isAuthenticated = false
-        statusMessage = message
-        resetProtectedUi()
-    }
-
     fun handleProtectedFailure(errorMessage: String) {
-        if (isAuthErrorMessage(errorMessage)) {
-            invalidateLocalSession("Sesion no valida o caducada. Inicia sesion de nuevo.")
-        }
-    }
-
-    fun loadChats() {
-        isChatsLoading = true
-        chatsMessage = "Consultando /chats..."
-
-        CoroutineScope(Dispatchers.IO).launch {
-            val result = chatsRequest(context = context)
-
-            withContext(Dispatchers.Main) {
-                isChatsLoading = false
-                if (result.isSuccess) {
-                    chats = result.getOrDefault(emptyList())
-                    chatsMessage = if (chats.isEmpty()) {
-                        "No hay chats disponibles."
-                    } else {
-                        "Chats cargados correctamente."
-                    }
-                } else {
-                    chats = emptyList()
-                    val errorMessage =
-                        result.exceptionOrNull()?.message ?: "Error desconocido"
-                    chatsMessage = errorMessage
-                    handleProtectedFailure(errorMessage)
-                }
-            }
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        CoroutineScope(Dispatchers.IO).launch {
-            val result = restoreSessionRequest(context)
-
-            withContext(Dispatchers.Main) {
-                isCheckingSession = false
-
-                if (result.isSuccess) {
-                    val session = result.getOrNull()
-
-                    if (session != null) {
-                        isAuthenticated = true
-                        statusMessage =
-                            "Sesion restaurada correctamente.\nUsuario: ${session.username}\nDispositivo: ${session.deviceName}\nExpira: ${session.expiresAt}"
-                        loadChats()
-                    } else {
-                        invalidateLocalSession("No hay sesion valida. Inicia sesion primero.")
-                    }
-                } else {
-                    invalidateLocalSession("No hay sesion valida. Inicia sesion primero.")
-                }
-            }
-        }
-    }
-
-    LaunchedEffect(isAuthenticated) {
-        if (!isAuthenticated) return@LaunchedEffect
-
-        while (isAuthenticated) {
-            val result = withContext(Dispatchers.IO) {
-                latestEmergencyRequest(context)
-            }
-
-            if (result.isSuccess) {
-                val emergency = result.getOrNull()
-
-                if (emergency != null) {
-                    if (lastSeenEmergencyId == 0L) {
-                        lastSeenEmergencyId = emergency.id
-                    } else if (emergency.id != lastSeenEmergencyId) {
-                        lastSeenEmergencyId = emergency.id
-
-                        if (emergency.id != dismissedEmergencyId) {
-                            latestEmergencyAlert = emergency
-                        }
-                    }
-                }
-            } else {
-                val errorMessage = result.exceptionOrNull()?.message ?: ""
-                if (isAuthErrorMessage(errorMessage)) {
-                    invalidateLocalSession("Sesion no valida o caducada. Inicia sesion de nuevo.")
-                }
-            }
-
-            delay(5000)
-        }
+        onProtectedFailure(errorMessage)
     }
 
     Box(
@@ -401,7 +467,7 @@ private fun MainScreen(
 
                                                         newChatUsername = ""
                                                         showCreateChat = false
-                                                        loadChats()
+                                                        onLoadChats()
                                                     } else {
                                                         createChatMessage =
                                                             result.exceptionOrNull()?.message ?: "Error desconocido."
@@ -464,10 +530,9 @@ private fun MainScreen(
                                         isLogoutLoading = false
 
                                         if (result.isSuccess) {
-                                            isAuthenticated = false
                                             resetProtectedUi()
                                             logoutMessage = result.getOrDefault("Logout OK")
-                                            statusMessage = "Sesion cerrada correctamente."
+                                            onLogoutSuccess(logoutMessage)
                                         } else {
                                             val errorMessage =
                                                 result.exceptionOrNull()?.message ?: "Error desconocido"
@@ -494,8 +559,7 @@ private fun MainScreen(
                             onOpenEmergencyMap(latestEmergencyAlert!!)
                         },
                         onDismiss = {
-                            dismissedEmergencyId = latestEmergencyAlert?.id ?: 0L
-                            latestEmergencyAlert = null
+                            onDismissEmergencyAlert()
                         }
                     )
 
@@ -600,7 +664,7 @@ private fun MainScreen(
                 Button(
                     onClick = {
                         isLoading = true
-                        statusMessage = "Iniciando sesion..."
+                        onStatusMessageChange("Iniciando sesion...")
 
                         CoroutineScope(Dispatchers.IO).launch {
                             val result = loginRequest(
@@ -617,24 +681,14 @@ private fun MainScreen(
                                     val loginResult = result.getOrNull()
 
                                     if (loginResult != null) {
-                                        saveToken(
-                                            context = context,
-                                            accessToken = loginResult.accessToken,
-                                            expiresAt = loginResult.expiresAt
-                                        )
-
-                                        isAuthenticated = true
-                                        statusMessage =
-                                            "Login OK. Sesion iniciada.\nExpira: ${loginResult.expiresAt}"
-                                        loadChats()
+                                        onLoginSuccess(loginResult)
                                     } else {
-                                        isAuthenticated = false
-                                        statusMessage = "Error inesperado: respuesta vacia"
+                                        onLoginFailure("Error inesperado: respuesta vacia")
                                     }
                                 } else {
-                                    isAuthenticated = false
-                                    statusMessage =
+                                    onLoginFailure(
                                         result.exceptionOrNull()?.message ?: "Error desconocido"
+                                    )
                                 }
                             }
                         }
@@ -1550,9 +1604,13 @@ private suspend fun getLastKnownDeviceLocation(context: Context): Location? {
     }
 
     val fusedLocationClient = getFusedLocationProviderClient(context)
+    val cancellationTokenSource = CancellationTokenSource()
 
     return suspendCancellableCoroutine { continuation ->
-        fusedLocationClient.lastLocation
+        fusedLocationClient.getCurrentLocation(
+            Priority.PRIORITY_HIGH_ACCURACY,
+            cancellationTokenSource.token
+        )
             .addOnSuccessListener { location ->
                 if (continuation.isActive) {
                     continuation.resume(location)
@@ -1565,27 +1623,20 @@ private suspend fun getLastKnownDeviceLocation(context: Context): Location? {
             }
 
         continuation.invokeOnCancellation {
-            // No-op: lastLocation cannot be explicitly cancelled.
+            cancellationTokenSource.cancel()
         }
     }
 }
 
 private fun getOrCreateDeviceUuid(context: Context): String {
-    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    val existingUuid = prefs.getString(KEY_DEVICE_UUID, null)
+    val androidId = android.provider.Settings.Secure.getString(
+        context.contentResolver,
+        android.provider.Settings.Secure.ANDROID_ID
+    )
 
-    if (!existingUuid.isNullOrBlank()) {
-        return existingUuid
-    }
-
-    val newUuid = UUID.randomUUID().toString()
-
-    prefs.edit()
-        .putString(KEY_DEVICE_UUID, newUuid)
-        .apply()
-
-    return newUuid
+    return androidId ?: "unknown_android_device"
 }
+
 
 private fun saveToken(context: Context, accessToken: String, expiresAt: String) {
     val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -1631,7 +1682,7 @@ private fun loginRequest(
     return try {
         val deviceUuid = getOrCreateDeviceUuid(context)
 
-        val url = URL("http://10.0.2.2:8000/auth/login")
+        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/auth/login")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -1689,7 +1740,7 @@ private fun restoreSessionRequest(context: Context): Result<SessionInfo> {
             return Result.failure(Exception("No hay token guardado."))
         }
 
-        val url = URL("http://10.0.2.2:8000/me")
+        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/me")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -1736,7 +1787,7 @@ private fun chatsRequest(context: Context): Result<List<ChatSummary>> {
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("http://10.0.2.2:8000/chats")
+        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/chats")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -1811,7 +1862,7 @@ private fun createDmRequest(
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("http://10.0.2.2:8000/chats/dm")
+        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/chats/dm")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -1865,7 +1916,7 @@ private fun devicesRequest(context: Context): Result<List<DeviceInfo>> {
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("http://10.0.2.2:8000/devices")
+        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/devices")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -1935,7 +1986,7 @@ private fun revokeDeviceRequest(context: Context, deviceId: Int): Result<String>
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("http://10.0.2.2:8000/devices/$deviceId/revoke")
+        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/devices/$deviceId/revoke")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -1975,7 +2026,7 @@ private fun messagesRequest(context: Context, chatId: Int): Result<List<ChatMess
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("http://10.0.2.2:8000/chats/$chatId/messages")
+        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/chats/$chatId/messages")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -2029,7 +2080,7 @@ private fun sendMessageRequest(context: Context, chatId: Int, content: String): 
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("http://10.0.2.2:8000/chats/$chatId/messages")
+        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/chats/$chatId/messages")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -2088,7 +2139,7 @@ private fun emergencyRequest(
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("http://10.0.2.2:8000/emergency")
+        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/emergency")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -2148,7 +2199,7 @@ private fun latestEmergencyRequest(context: Context): Result<EmergencyEvent> {
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("http://10.0.2.2:8000/emergency/latest")
+        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/emergency/latest")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -2196,7 +2247,7 @@ private fun logoutRequest(context: Context): Result<String> {
             return Result.failure(Exception("No hay token guardado. No hay sesion que cerrar."))
         }
 
-        val url = URL("http://10.0.2.2:8000/auth/logout")
+        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/auth/logout")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
