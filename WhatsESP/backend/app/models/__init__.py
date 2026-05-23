@@ -12,3 +12,4 @@ from .token import Token
 from .chat import Chat
 from .chat_member import ChatMember
 from .message import Message
+from .emergency_event import EmergencyEvent

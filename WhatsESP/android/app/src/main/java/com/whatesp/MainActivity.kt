@@ -100,10 +100,12 @@ class MainActivity : ComponentActivity() {
                 var chatsMessage by remember { mutableStateOf("Resultado de /chats pendiente") }
                 var chats by remember { mutableStateOf<List<ChatSummary>>(emptyList()) }
                 var latestEmergencyAlert by remember { mutableStateOf<EmergencyEvent?>(null) }
+                var lastEmergencyEvent by remember { mutableStateOf<EmergencyEvent?>(null) }
                 var lastSeenEmergencyId by remember { mutableLongStateOf(0L) }
                 var dismissedEmergencyId by remember { mutableLongStateOf(0L) }
 
                 var isAuthenticated by rememberSaveable { mutableStateOf(false) }
+                var currentUserId by rememberSaveable { mutableStateOf(0) }
                 var isCheckingSession by remember { mutableStateOf(true) }
                 var isChatsLoading by remember { mutableStateOf(false) }
 
@@ -111,6 +113,7 @@ class MainActivity : ComponentActivity() {
                     chats = emptyList()
                     chatsMessage = "Resultado de /chats pendiente"
                     latestEmergencyAlert = null
+                    lastEmergencyEvent = null
                     selectedChat = null
                     selectedEmergency = null
                     currentScreen = AppScreen.Main
@@ -119,6 +122,7 @@ class MainActivity : ComponentActivity() {
                 fun invalidateLocalSession(message: String) {
                     clearToken(context = this)
                     isAuthenticated = false
+                    currentUserId = 0
                     statusMessage = message
                     resetProtectedUi()
                 }
@@ -168,6 +172,7 @@ class MainActivity : ComponentActivity() {
 
                         if (session != null) {
                             isAuthenticated = true
+                            currentUserId = session.userId
                             statusMessage =
                                 "Sesion restaurada correctamente.\nUsuario: ${session.username}\nDispositivo: ${session.deviceName}\nExpira: ${session.expiresAt}"
                             loadChats()
@@ -195,6 +200,8 @@ class MainActivity : ComponentActivity() {
                                     lastSeenEmergencyId = emergency.id
                                 } else if (emergency.id != lastSeenEmergencyId) {
                                     lastSeenEmergencyId = emergency.id
+
+                                    lastEmergencyEvent = emergency
 
                                     if (emergency.id != dismissedEmergencyId) {
                                         latestEmergencyAlert = emergency
@@ -224,6 +231,7 @@ class MainActivity : ComponentActivity() {
                                 chatsMessage = chatsMessage,
                                 isChatsLoading = isChatsLoading,
                                 latestEmergencyAlert = latestEmergencyAlert,
+                                lastEmergencyEvent = lastEmergencyEvent,
                                 onStatusMessageChange = { statusMessage = it },
                                 onLoginSuccess = { loginResult ->
                                     saveToken(
@@ -231,10 +239,28 @@ class MainActivity : ComponentActivity() {
                                         accessToken = loginResult.accessToken,
                                         expiresAt = loginResult.expiresAt
                                     )
-                                    isAuthenticated = true
-                                    statusMessage =
-                                        "Login OK. Sesion iniciada.\nExpira: ${loginResult.expiresAt}"
-                                    loadChats()
+
+                                    CoroutineScope(Dispatchers.IO).launch {
+                                        val sessionResult = restoreSessionRequest(this@MainActivity)
+
+                                        withContext(Dispatchers.Main) {
+                                            if (sessionResult.isSuccess) {
+                                                val session = sessionResult.getOrNull()
+
+                                                currentUserId = session?.userId ?: 0
+                                                isAuthenticated = true
+                                                statusMessage =
+                                                    "Login OK. Sesion iniciada.\nExpira: ${loginResult.expiresAt}"
+                                                loadChats()
+                                            } else {
+                                                isAuthenticated = false
+                                                currentUserId = 0
+                                                statusMessage =
+                                                    sessionResult.exceptionOrNull()?.message
+                                                        ?: "No se pudo obtener la sesion del usuario."
+                                            }
+                                        }
+                                    }
                                 },
                                 onLoginFailure = { message ->
                                     isAuthenticated = false
@@ -242,6 +268,7 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onLogoutSuccess = { _ ->
                                     isAuthenticated = false
+                                    currentUserId = 0
                                     resetProtectedUi()
                                     statusMessage = "Sesion cerrada correctamente."
                                 },
@@ -282,6 +309,7 @@ class MainActivity : ComponentActivity() {
                                 ChatScreen(
                                     context = this,
                                     chat = chat,
+                                    currentUserId = currentUserId,
                                     onBack = {
                                         selectedChat = null
                                         currentScreen = AppScreen.Main
@@ -348,6 +376,7 @@ private fun MainScreen(
     chatsMessage: String,
     isChatsLoading: Boolean,
     latestEmergencyAlert: EmergencyEvent?,
+    lastEmergencyEvent: EmergencyEvent?,
     onStatusMessageChange: (String) -> Unit,
     onLoginSuccess: (LoginResult) -> Unit,
     onLoginFailure: (String) -> Unit,
@@ -601,6 +630,17 @@ private fun MainScreen(
                             )
                         }
                     }
+                }
+
+                if (lastEmergencyEvent != null) {
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    LastEmergencyEventCard(
+                        emergency = lastEmergencyEvent,
+                        onOpenMap = {
+                            onOpenEmergencyMap(lastEmergencyEvent)
+                        }
+                    )
                 }
             }
         } else {
@@ -1120,9 +1160,53 @@ private fun EmergencyAlertCard(
 }
 
 @Composable
+private fun LastEmergencyEventCard(
+    emergency: EmergencyEvent,
+    onOpenMap: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFFFFEDEA)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Text(
+                text = "Ultima alerta SOS",
+                style = MaterialTheme.typography.titleMedium,
+                color = Color(0xFFB3261E),
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(text = "Usuario: ${emergency.userId}")
+            Text(text = "Fecha: ${emergency.createdAt}")
+            Text(text = "Coordenadas: ${emergency.latitude}, ${emergency.longitude}")
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Button(
+                onClick = onOpenMap,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFB3261E),
+                    contentColor = Color.White
+                )
+            ) {
+                Text("Ver mapa")
+            }
+        }
+    }
+}
+
+@Composable
 private fun ChatScreen(
     context: Context,
     chat: ChatSummary,
+    currentUserId: Int,
     onBack: () -> Unit,
     onSessionExpired: () -> Unit,
     modifier: Modifier = Modifier
@@ -1142,8 +1226,10 @@ private fun ChatScreen(
         onSessionExpired()
     }
 
-    fun loadMessages() {
-        isMessagesLoading = true
+    fun loadMessages(showLoading: Boolean = true) {
+        if (showLoading) {
+            isMessagesLoading = true
+        }
         messagesMessage = ""
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -1153,7 +1239,9 @@ private fun ChatScreen(
             )
 
             withContext(Dispatchers.Main) {
-                isMessagesLoading = false
+                if (showLoading) {
+                    isMessagesLoading = false
+                }
                 if (result.isSuccess) {
                     chatMessages = result.getOrDefault(emptyList())
                     messagesMessage = ""
@@ -1171,7 +1259,14 @@ private fun ChatScreen(
     }
 
     LaunchedEffect(chat.chatId) {
-        loadMessages()
+        loadMessages(showLoading = true)
+    }
+
+    LaunchedEffect(chat.chatId) {
+        while (true) {
+            delay(3000)
+            loadMessages(showLoading = false)
+        }
     }
 
     LaunchedEffect(chat.chatId, chatMessages.size) {
@@ -1287,7 +1382,10 @@ private fun ChatScreen(
                     }
                 } else {
                     items(chatMessages) { message ->
-                        MessageItem(message = message)
+                        MessageItem(
+                            message = message,
+                            currentUserId = currentUserId
+                        )
                     }
                 }
             }
@@ -1494,8 +1592,11 @@ private data class DeviceInfo(
 )
 
 @Composable
-private fun MessageItem(message: ChatMessage) {
-    val isSentByCurrentUser = message.senderUserId == 1
+private fun MessageItem(
+    message: ChatMessage,
+    currentUserId: Int
+) {
+    val isSentByCurrentUser = message.senderUserId == currentUserId
 
     val bubbleColor = if (isSentByCurrentUser) {
         MaterialTheme.colorScheme.primaryContainer
@@ -1682,7 +1783,7 @@ private fun loginRequest(
     return try {
         val deviceUuid = getOrCreateDeviceUuid(context)
 
-        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/auth/login")
+        val url = URL("http://192.168.1.17:8000/auth/login")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -1740,7 +1841,7 @@ private fun restoreSessionRequest(context: Context): Result<SessionInfo> {
             return Result.failure(Exception("No hay token guardado."))
         }
 
-        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/me")
+        val url = URL("http://192.168.1.17:8000/me")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -1787,7 +1888,7 @@ private fun chatsRequest(context: Context): Result<List<ChatSummary>> {
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/chats")
+        val url = URL("http://192.168.1.17:8000/chats")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -1862,7 +1963,7 @@ private fun createDmRequest(
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/chats/dm")
+        val url = URL("http://192.168.1.17:8000/chats/dm")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -1916,7 +2017,7 @@ private fun devicesRequest(context: Context): Result<List<DeviceInfo>> {
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/devices")
+        val url = URL("http://192.168.1.17:8000/devices")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -1986,7 +2087,7 @@ private fun revokeDeviceRequest(context: Context, deviceId: Int): Result<String>
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/devices/$deviceId/revoke")
+        val url = URL("http://192.168.1.17:8000/devices/$deviceId/revoke")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -2026,7 +2127,7 @@ private fun messagesRequest(context: Context, chatId: Int): Result<List<ChatMess
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/chats/$chatId/messages")
+        val url = URL("http://192.168.1.17:8000/chats/$chatId/messages")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -2080,7 +2181,7 @@ private fun sendMessageRequest(context: Context, chatId: Int, content: String): 
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/chats/$chatId/messages")
+        val url = URL("http://192.168.1.17:8000/chats/$chatId/messages")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -2139,7 +2240,7 @@ private fun emergencyRequest(
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/emergency")
+        val url = URL("http://192.168.1.17:8000/emergency")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -2199,7 +2300,7 @@ private fun latestEmergencyRequest(context: Context): Result<EmergencyEvent> {
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/emergency/latest")
+        val url = URL("http://192.168.1.17:8000/emergency/latest")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -2247,7 +2348,7 @@ private fun logoutRequest(context: Context): Result<String> {
             return Result.failure(Exception("No hay token guardado. No hay sesion que cerrar."))
         }
 
-        val url = URL("https://selecting-hospitality-foo-caring.trycloudflare.com/auth/logout")
+        val url = URL("http://192.168.1.17:8000/auth/logout")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
