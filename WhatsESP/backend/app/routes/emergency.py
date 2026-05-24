@@ -32,6 +32,7 @@ class EmergencyCreateOut(BaseModel):
 class EmergencyLatestOut(BaseModel):
     id: int
     user_id: int
+    username: str
     device_id: int
     latitude: Decimal
     longitude: Decimal
@@ -106,15 +107,17 @@ def get_latest_emergency(
             text(
                 """
                 SELECT
-                    id,
-                    user_id,
-                    device_id,
-                    latitude,
-                    longitude,
-                    note,
-                    created_at
-                FROM emergency_events
-                ORDER BY id DESC
+                    e.id,
+                    e.user_id,
+                    u.username,
+                    e.device_id,
+                    e.latitude,
+                    e.longitude,
+                    e.note,
+                    e.created_at
+                FROM emergency_events e
+                JOIN users u ON u.id = e.user_id
+                ORDER BY e.id DESC
                 LIMIT 1
                 """
             )
@@ -126,6 +129,7 @@ def get_latest_emergency(
     return EmergencyLatestOut(
         id=int(row["id"]),
         user_id=int(row["user_id"]),
+        username=row["username"],
         device_id=int(row["device_id"]),
         latitude=row["latitude"],
         longitude=row["longitude"],

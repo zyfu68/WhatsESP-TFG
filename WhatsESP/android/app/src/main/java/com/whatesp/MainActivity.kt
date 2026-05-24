@@ -295,6 +295,9 @@ class MainActivity : ComponentActivity() {
                                     dismissedEmergencyId = latestEmergencyAlert?.id ?: 0L
                                     latestEmergencyAlert = null
                                 },
+                                onDismissLastEmergency = {
+                                    lastEmergencyEvent = null
+                                },
                                 onOpenSettings = {
                                     currentScreen = AppScreen.Settings
                                 },
@@ -400,6 +403,7 @@ private fun MainScreen(
     onOpenChat: (ChatSummary) -> Unit,
     onOpenEmergencyMap: (EmergencyEvent) -> Unit,
     onDismissEmergencyAlert: () -> Unit,
+    onDismissLastEmergency: () -> Unit,
     onOpenSettings: () -> Unit,
     onForceBackToMain: () -> Unit,
     modifier: Modifier = Modifier
@@ -653,7 +657,8 @@ private fun MainScreen(
                         emergency = lastEmergencyEvent,
                         onOpenMap = {
                             onOpenEmergencyMap(lastEmergencyEvent)
-                        }
+                        },
+                        onDismissLastEmergency = onDismissLastEmergency
                     )
                 }
             }
@@ -1150,18 +1155,14 @@ private fun EmergencyAlertCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Text(text = "Evento: ${emergency.id}", color = Color.White)
-            Text(text = "Usuario: ${emergency.userId}", color = Color.White)
-            Text(text = "Dispositivo: ${emergency.deviceId}", color = Color.White)
-            Text(text = "Latitud: ${emergency.latitude}", color = Color.White)
-            Text(text = "Longitud: ${emergency.longitude}", color = Color.White)
-            Text(text = "Nota: ${emergency.note}", color = Color.White)
+            Text(text = "Enviada por: ${emergency.username}", color = Color.White)
             Text(text = "Fecha: ${emergency.createdAt}", color = Color.White)
+            Text(text = "Ubicación: ${emergency.latitude}, ${emergency.longitude}", color = Color.White)
 
             Spacer(modifier = Modifier.height(12.dp))
 
             Button(onClick = onOpenMap) {
-                Text("Ver en mapa")
+                Text("Ver mapa")
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -1176,7 +1177,8 @@ private fun EmergencyAlertCard(
 @Composable
 private fun LastEmergencyEventCard(
     emergency: EmergencyEvent,
-    onOpenMap: () -> Unit
+    onOpenMap: () -> Unit,
+    onDismissLastEmergency: () -> Unit
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -1197,20 +1199,34 @@ private fun LastEmergencyEventCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Text(text = "Usuario: ${emergency.userId}")
+            Text(text = "Enviada por: ${emergency.username}")
             Text(text = "Fecha: ${emergency.createdAt}")
-            Text(text = "Coordenadas: ${emergency.latitude}, ${emergency.longitude}")
+            Text(text = "Ubicación: ${emergency.latitude}, ${emergency.longitude}")
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Button(
-                onClick = onOpenMap,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFB3261E),
-                    contentColor = Color.White
-                )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Ver mapa")
+                Button(
+                    onClick = onOpenMap,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFB3261E),
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text("Ver mapa")
+                }
+
+                Button(
+                    onClick = onDismissLastEmergency,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF6C3B36),
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text("Ocultar")
+                }
             }
         }
     }
@@ -1607,6 +1623,7 @@ private data class ChatMessage(
 private data class EmergencyEvent(
     val id: Long,
     val userId: Int,
+    val username: String,
     val deviceId: Int,
     val latitude: String,
     val longitude: String,
@@ -2355,6 +2372,7 @@ private fun latestEmergencyRequest(context: Context): Result<EmergencyEvent> {
                 EmergencyEvent(
                     id = jsonResponse.optLong("id", 0L),
                     userId = jsonResponse.optInt("user_id", 0),
+                    username = jsonResponse.optString("username", "Usuario desconocido"),
                     deviceId = jsonResponse.optInt("device_id", 0),
                     latitude = jsonResponse.optString("latitude", "Sin latitud"),
                     longitude = jsonResponse.optString("longitude", "Sin longitud"),
