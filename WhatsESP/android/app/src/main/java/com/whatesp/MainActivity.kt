@@ -14,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -27,7 +28,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -441,31 +441,36 @@ private fun MainScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(24.dp)
-                    .padding(bottom = 110.dp)
+                    .padding(horizontal = 20.dp, vertical = 24.dp)
+                    .padding(bottom = 124.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.Top
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "WhatsESP",
-                            style = MaterialTheme.typography.headlineMedium
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
                         )
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
 
                         Text(
                             text = "Tus chats",
-                            style = MaterialTheme.typography.titleMedium
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(14.dp))
 
                         Button(
                             onClick = { showCreateChat = true },
-                            shape = RoundedCornerShape(20.dp)
+                            shape = RoundedCornerShape(18.dp),
+                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp)
                         ) {
                             Text("Nuevo chat")
                         }
@@ -554,16 +559,16 @@ private fun MainScreen(
                     }
 
                     Column(
-                        horizontalAlignment = Alignment.End
+                        horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Button(
                             onClick = onOpenSettings,
-                            shape = RoundedCornerShape(20.dp)
+                            shape = RoundedCornerShape(18.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
                         ) {
                             Text("Ajustes")
                         }
-
-                        Spacer(modifier = Modifier.height(8.dp))
 
                         Button(
                             onClick = {
@@ -590,14 +595,15 @@ private fun MainScreen(
                                 }
                             },
                             enabled = !isLogoutLoading && !isCheckingSession,
-                            shape = RoundedCornerShape(20.dp)
+                            shape = RoundedCornerShape(18.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
                         ) {
                             Text("Cerrar sesión")
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(22.dp))
 
                 if (latestEmergencyAlert != null) {
                     EmergencyAlertCard(
@@ -639,7 +645,8 @@ private fun MainScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        contentPadding = PaddingValues(vertical = 4.dp)
                     ) {
                         items(chats) { chat ->
                             ChatListItem(
@@ -775,7 +782,7 @@ private fun MainScreen(
         EmergencyBottomButton(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 24.dp),
+                .padding(bottom = 32.dp),
             enabled = !isEmergencyLoading
         ) {
             if (!hasLocationPermission(context)) {
@@ -1070,31 +1077,32 @@ private fun ChatListItem(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() },
-        shape = RoundedCornerShape(20.dp),
-        tonalElevation = 2.dp,
-        color = MaterialTheme.colorScheme.surfaceVariant
+        shape = RoundedCornerShape(24.dp),
+        tonalElevation = 3.dp,
+        shadowElevation = 2.dp,
+        color = MaterialTheme.colorScheme.surface
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 16.dp)
+                .padding(horizontal = 20.dp, vertical = 18.dp)
         ) {
             Text(
                 text = chat.otherUsername,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
             )
 
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             Text(
                 text = "Chat ${chat.chatId}",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             Text(
                 text = if (chat.lastMessagePreview == "null" || chat.lastMessagePreview.isBlank())
@@ -1102,7 +1110,7 @@ private fun ChatListItem(
                 else
                     chat.lastMessagePreview,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.95f)
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.78f)
             )
         }
     }
@@ -1117,16 +1125,23 @@ private fun EmergencyBottomButton(
     Button(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier.size(84.dp),
-        shape = CircleShape,
+        modifier = modifier.size(width = 104.dp, height = 64.dp),
+        shape = RoundedCornerShape(28.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = Color(0xFFD93025),
             contentColor = Color.White
-        )
+        ),
+        elevation = ButtonDefaults.buttonElevation(
+            defaultElevation = 8.dp,
+            pressedElevation = 3.dp,
+            disabledElevation = 0.dp
+        ),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
     ) {
         Text(
             text = "SOS",
-            fontSize = 18.sp
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Bold
         )
     }
 }
