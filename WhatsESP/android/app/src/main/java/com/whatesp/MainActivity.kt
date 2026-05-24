@@ -184,38 +184,43 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                LaunchedEffect(isAuthenticated) {
-                    if (!isAuthenticated) return@LaunchedEffect
+                LaunchedEffect(isAuthenticated, currentUserId) {
+                    if (isAuthenticated && currentUserId != 0) {
+                        while (isAuthenticated) {
+                            val result = withContext(Dispatchers.IO) {
+                                latestEmergencyRequest(this@MainActivity)
+                            }
 
-                    while (isAuthenticated) {
-                        val result = withContext(Dispatchers.IO) {
-                            latestEmergencyRequest(this@MainActivity)
-                        }
+                            if (result.isSuccess) {
+                                val emergency = result.getOrNull()
 
-                        if (result.isSuccess) {
-                            val emergency = result.getOrNull()
+                                if (emergency != null) {
+                                    if (emergency.userId == currentUserId) {
+                                        lastSeenEmergencyId = emergency.id
+                                        latestEmergencyAlert = null
+                                    } else {
+                                        if (lastSeenEmergencyId == 0L) {
+                                            lastSeenEmergencyId = emergency.id
+                                            lastEmergencyEvent = emergency
+                                        } else if (emergency.id != lastSeenEmergencyId) {
+                                            lastSeenEmergencyId = emergency.id
+                                            lastEmergencyEvent = emergency
 
-                            if (emergency != null) {
-                                if (lastSeenEmergencyId == 0L) {
-                                    lastSeenEmergencyId = emergency.id
-                                } else if (emergency.id != lastSeenEmergencyId) {
-                                    lastSeenEmergencyId = emergency.id
-
-                                    lastEmergencyEvent = emergency
-
-                                    if (emergency.id != dismissedEmergencyId) {
-                                        latestEmergencyAlert = emergency
+                                            if (emergency.id != dismissedEmergencyId) {
+                                                latestEmergencyAlert = emergency
+                                            }
+                                        }
                                     }
                                 }
+                            } else {
+                                val errorMessage = result.exceptionOrNull()?.message ?: ""
+                                if (isAuthErrorMessage(errorMessage)) {
+                                    invalidateLocalSession("Sesion no valida o caducada. Inicia sesion de nuevo.")
+                                }
                             }
-                        } else {
-                            val errorMessage = result.exceptionOrNull()?.message ?: ""
-                            if (isAuthErrorMessage(errorMessage)) {
-                                invalidateLocalSession("Sesion no valida o caducada. Inicia sesion de nuevo.")
-                            }
-                        }
 
-                        delay(5000)
+                            delay(5000)
+                        }
                     }
                 }
 
@@ -310,6 +315,15 @@ class MainActivity : ComponentActivity() {
                                     context = this,
                                     chat = chat,
                                     currentUserId = currentUserId,
+                                    latestEmergencyAlert = latestEmergencyAlert,
+                                    onOpenEmergencyMap = { emergency ->
+                                        selectedEmergency = emergency
+                                        currentScreen = AppScreen.EmergencyMap
+                                    },
+                                    onDismissEmergencyAlert = {
+                                        dismissedEmergencyId = latestEmergencyAlert?.id ?: 0L
+                                        latestEmergencyAlert = null
+                                    },
                                     onBack = {
                                         selectedChat = null
                                         currentScreen = AppScreen.Main
@@ -1207,6 +1221,9 @@ private fun ChatScreen(
     context: Context,
     chat: ChatSummary,
     currentUserId: Int,
+    latestEmergencyAlert: EmergencyEvent?,
+    onOpenEmergencyMap: (EmergencyEvent) -> Unit,
+    onDismissEmergencyAlert: () -> Unit,
     onBack: () -> Unit,
     onSessionExpired: () -> Unit,
     modifier: Modifier = Modifier
@@ -1317,6 +1334,20 @@ private fun ChatScreen(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
+
+            latestEmergencyAlert?.let { emergency ->
+                EmergencyAlertCard(
+                    emergency = emergency,
+                    onOpenMap = {
+                        onOpenEmergencyMap(emergency)
+                    },
+                    onDismiss = {
+                        onDismissEmergencyAlert()
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+            }
 
             HorizontalDivider()
 
