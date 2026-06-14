@@ -114,6 +114,8 @@ class MainActivity : ComponentActivity() {
                     chatsMessage = "Resultado de /chats pendiente"
                     latestEmergencyAlert = null
                     lastEmergencyEvent = null
+                    lastSeenEmergencyId = 0L
+                    dismissedEmergencyId = 0L
                     selectedChat = null
                     selectedEmergency = null
                     currentScreen = AppScreen.Main
@@ -133,15 +135,19 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                fun loadChats() {
-                    isChatsLoading = true
-                    chatsMessage = "Consultando /chats..."
+                fun loadChats(showLoading: Boolean = true) {
+                    if (showLoading) {
+                        isChatsLoading = true
+                        chatsMessage = "Consultando /chats..."
+                    }
 
                     CoroutineScope(Dispatchers.IO).launch {
                         val result = chatsRequest(context = this@MainActivity)
 
                         withContext(Dispatchers.Main) {
-                            isChatsLoading = false
+                            if (showLoading) {
+                                isChatsLoading = false
+                            }
                             if (result.isSuccess) {
                                 chats = result.getOrDefault(emptyList())
                                 chatsMessage = if (chats.isEmpty()) {
@@ -150,10 +156,12 @@ class MainActivity : ComponentActivity() {
                                     "Chats cargados correctamente."
                                 }
                             } else {
-                                chats = emptyList()
                                 val errorMessage =
                                     result.exceptionOrNull()?.message ?: "Error desconocido"
-                                chatsMessage = errorMessage
+                                if (showLoading) {
+                                    chats = emptyList()
+                                    chatsMessage = errorMessage
+                                }
                                 handleProtectedFailure(errorMessage)
                             }
                         }
@@ -195,14 +203,15 @@ class MainActivity : ComponentActivity() {
                                 val emergency = result.getOrNull()
 
                                 if (emergency != null) {
-                                    if (emergency.userId == currentUserId) {
+                                    if (lastSeenEmergencyId == 0L) {
+                                        lastSeenEmergencyId = emergency.id
+                                        latestEmergencyAlert = null
+                                        lastEmergencyEvent = null
+                                    } else if (emergency.userId == currentUserId) {
                                         lastSeenEmergencyId = emergency.id
                                         latestEmergencyAlert = null
                                     } else {
-                                        if (lastSeenEmergencyId == 0L) {
-                                            lastSeenEmergencyId = emergency.id
-                                            lastEmergencyEvent = emergency
-                                        } else if (emergency.id != lastSeenEmergencyId) {
+                                        if (emergency.id != lastSeenEmergencyId) {
                                             lastSeenEmergencyId = emergency.id
                                             lastEmergencyEvent = emergency
 
@@ -221,6 +230,13 @@ class MainActivity : ComponentActivity() {
 
                             delay(5000)
                         }
+                    }
+                }
+
+                LaunchedEffect(isAuthenticated) {
+                    while (isAuthenticated) {
+                        delay(5000)
+                        loadChats(showLoading = false)
                     }
                 }
 
@@ -474,88 +490,6 @@ private fun MainScreen(
                         ) {
                             Text("Nuevo chat")
                         }
-
-                        if (showCreateChat) {
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            OutlinedTextField(
-                                value = newChatUsername,
-                                onValueChange = { newChatUsername = it },
-                                label = { Text("Usuario") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            Row {
-                                Button(
-                                    onClick = {
-                                        val usernameToCreate = newChatUsername.trim()
-
-                                        if (usernameToCreate.isBlank()) {
-                                            createChatMessage = "Introduce un usuario."
-                                        } else {
-                                            isCreatingChat = true
-                                            createChatMessage = "Creando chat..."
-
-                                            CoroutineScope(Dispatchers.IO).launch {
-                                                val result = createDmRequest(
-                                                    context = context,
-                                                    otherUsername = usernameToCreate
-                                                )
-
-                                                withContext(Dispatchers.Main) {
-                                                    isCreatingChat = false
-
-                                                    if (result.isSuccess) {
-                                                        val createdChat = result.getOrNull()
-
-                                                        createChatMessage = if (createdChat?.created == true) {
-                                                            "Chat creado con ${createdChat.otherUsername}."
-                                                        } else {
-                                                            "Chat ya existente con ${createdChat?.otherUsername}."
-                                                        }
-
-                                                        newChatUsername = ""
-                                                        showCreateChat = false
-                                                        onLoadChats()
-                                                    } else {
-                                                        createChatMessage =
-                                                            result.exceptionOrNull()?.message ?: "Error desconocido."
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    },
-                                    enabled = !isCreatingChat
-                                ) {
-                                    Text(if (isCreatingChat) "..." else "Crear")
-                                }
-
-                                Spacer(modifier = Modifier.width(8.dp))
-
-                                Button(
-                                    onClick = {
-                                        showCreateChat = false
-                                        newChatUsername = ""
-                                        createChatMessage = ""
-                                    },
-                                    enabled = !isCreatingChat
-                                ) {
-                                    Text("Cancelar")
-                                }
-                            }
-                        }
-
-                        if (createChatMessage.isNotBlank()) {
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            Text(
-                                text = createChatMessage,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
                     }
 
                     Column(
@@ -603,7 +537,110 @@ private fun MainScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(22.dp))
+                Spacer(modifier = Modifier.height(16.dp))
+
+                if (showCreateChat) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        tonalElevation = 2.dp,
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = "Crear nuevo chat",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+
+                            OutlinedTextField(
+                                value = newChatUsername,
+                                onValueChange = { newChatUsername = it },
+                                label = { Text("Usuario") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Button(
+                                    onClick = {
+                                        val usernameToCreate = newChatUsername.trim()
+
+                                        if (usernameToCreate.isBlank()) {
+                                            createChatMessage = "Introduce un usuario."
+                                        } else {
+                                            isCreatingChat = true
+                                            createChatMessage = "Creando chat..."
+
+                                            CoroutineScope(Dispatchers.IO).launch {
+                                                val result = createDmRequest(
+                                                    context = context,
+                                                    otherUsername = usernameToCreate
+                                                )
+
+                                                withContext(Dispatchers.Main) {
+                                                    isCreatingChat = false
+
+                                                    if (result.isSuccess) {
+                                                        val createdChat = result.getOrNull()
+
+                                                        createChatMessage = if (createdChat?.created == true) {
+                                                            "Chat creado con ${createdChat.otherUsername}."
+                                                        } else {
+                                                            "Chat ya existente con ${createdChat?.otherUsername}."
+                                                        }
+
+                                                        newChatUsername = ""
+                                                        showCreateChat = false
+                                                        onLoadChats()
+                                                    } else {
+                                                        createChatMessage =
+                                                            result.exceptionOrNull()?.message ?: "Error desconocido."
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                    enabled = !isCreatingChat
+                                ) {
+                                    Text(if (isCreatingChat) "..." else "Crear")
+                                }
+
+                                Button(
+                                    onClick = {
+                                        showCreateChat = false
+                                        newChatUsername = ""
+                                        createChatMessage = ""
+                                    },
+                                    enabled = !isCreatingChat,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.secondary
+                                    )
+                                ) {
+                                    Text("Cancelar")
+                                }
+                            }
+
+                            if (createChatMessage.isNotBlank()) {
+                                Text(
+                                    text = createChatMessage,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                } else {
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
 
                 if (latestEmergencyAlert != null) {
                     EmergencyAlertCard(
@@ -1846,7 +1883,7 @@ private fun loginRequest(
     return try {
         val deviceUuid = getOrCreateDeviceUuid(context)
 
-        val url = URL("http://192.168.1.17:8000/auth/login")
+        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/auth/login")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -1904,7 +1941,7 @@ private fun restoreSessionRequest(context: Context): Result<SessionInfo> {
             return Result.failure(Exception("No hay token guardado."))
         }
 
-        val url = URL("http://192.168.1.17:8000/me")
+        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/me")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -1951,7 +1988,7 @@ private fun chatsRequest(context: Context): Result<List<ChatSummary>> {
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("http://192.168.1.17:8000/chats")
+        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/chats")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -2026,7 +2063,7 @@ private fun createDmRequest(
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("http://192.168.1.17:8000/chats/dm")
+        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/chats/dm")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -2080,7 +2117,7 @@ private fun devicesRequest(context: Context): Result<List<DeviceInfo>> {
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("http://192.168.1.17:8000/devices")
+        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/devices")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -2150,7 +2187,7 @@ private fun revokeDeviceRequest(context: Context, deviceId: Int): Result<String>
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("http://192.168.1.17:8000/devices/$deviceId/revoke")
+        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/devices/$deviceId/revoke")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -2190,7 +2227,7 @@ private fun messagesRequest(context: Context, chatId: Int): Result<List<ChatMess
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("http://192.168.1.17:8000/chats/$chatId/messages")
+        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/chats/$chatId/messages")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -2244,7 +2281,7 @@ private fun sendMessageRequest(context: Context, chatId: Int, content: String): 
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("http://192.168.1.17:8000/chats/$chatId/messages")
+        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/chats/$chatId/messages")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -2303,7 +2340,7 @@ private fun emergencyRequest(
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("http://192.168.1.17:8000/emergency")
+        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/emergency")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -2363,7 +2400,7 @@ private fun latestEmergencyRequest(context: Context): Result<EmergencyEvent> {
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("http://192.168.1.17:8000/emergency/latest")
+        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/emergency/latest")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -2412,7 +2449,7 @@ private fun logoutRequest(context: Context): Result<String> {
             return Result.failure(Exception("No hay token guardado. No hay sesion que cerrar."))
         }
 
-        val url = URL("http://192.168.1.17:8000/auth/logout")
+        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/auth/logout")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
