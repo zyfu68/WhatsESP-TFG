@@ -1883,7 +1883,7 @@ private fun loginRequest(
     return try {
         val deviceUuid = getOrCreateDeviceUuid(context)
 
-        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/auth/login")
+        val url = URL("https://api.whatesp.app/auth/login")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -1941,7 +1941,7 @@ private fun restoreSessionRequest(context: Context): Result<SessionInfo> {
             return Result.failure(Exception("No hay token guardado."))
         }
 
-        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/me")
+        val url = URL("https://api.whatesp.app/me")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -1988,7 +1988,7 @@ private fun chatsRequest(context: Context): Result<List<ChatSummary>> {
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/chats")
+        val url = URL("https://api.whatesp.app/chats")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -2063,7 +2063,7 @@ private fun createDmRequest(
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/chats/dm")
+        val url = URL("https://api.whatesp.app/chats/dm")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -2117,7 +2117,7 @@ private fun devicesRequest(context: Context): Result<List<DeviceInfo>> {
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/devices")
+        val url = URL("https://api.whatesp.app/devices")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -2187,7 +2187,7 @@ private fun revokeDeviceRequest(context: Context, deviceId: Int): Result<String>
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/devices/$deviceId/revoke")
+        val url = URL("https://api.whatesp.app/devices/$deviceId/revoke")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -2227,7 +2227,7 @@ private fun messagesRequest(context: Context, chatId: Int): Result<List<ChatMess
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/chats/$chatId/messages")
+        val url = URL("https://api.whatesp.app/chats/$chatId/messages")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -2281,7 +2281,7 @@ private fun sendMessageRequest(context: Context, chatId: Int, content: String): 
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/chats/$chatId/messages")
+        val url = URL("https://api.whatesp.app/chats/$chatId/messages")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -2340,7 +2340,7 @@ private fun emergencyRequest(
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/emergency")
+        val url = URL("https://api.whatesp.app/emergency")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -2400,7 +2400,7 @@ private fun latestEmergencyRequest(context: Context): Result<EmergencyEvent> {
             return Result.failure(Exception("No hay token guardado. Inicia sesion primero."))
         }
 
-        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/emergency/latest")
+        val url = URL("https://api.whatesp.app/emergency/latest")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 5000
@@ -2449,7 +2449,7 @@ private fun logoutRequest(context: Context): Result<String> {
             return Result.failure(Exception("No hay token guardado. No hay sesion que cerrar."))
         }
 
-        val url = URL("https://approximate-don-nurse-theaters.trycloudflare.com/auth/logout")
+        val url = URL("https://api.whatesp.app/auth/logout")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
