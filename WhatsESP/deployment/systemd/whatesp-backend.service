@@ -1,0 +1,15 @@
+[Unit]
+Description=WhatsESP FastAPI Backend
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=whatesp
+WorkingDirectory=/opt/whatesp/backend
+ExecStartPre=/bin/sleep 10
+ExecStart=/opt/whatesp/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
