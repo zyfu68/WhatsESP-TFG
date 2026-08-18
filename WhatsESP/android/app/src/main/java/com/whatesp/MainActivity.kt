@@ -74,6 +74,9 @@ import java.io.BufferedReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 import java.util.UUID
 import kotlin.coroutines.resume
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -1082,7 +1085,7 @@ private fun DeviceListItem(
             )
 
             Text(
-                text = "Último uso: ${device.lastSeenAt}",
+                text = "Último uso: ${formatServerDateTime(device.lastSeenAt, "dd/MM/yyyy HH:mm")}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
             )
@@ -1208,7 +1211,10 @@ private fun EmergencyAlertCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(text = "Enviada por: ${emergency.username}", color = Color.White)
-            Text(text = "Fecha: ${emergency.createdAt}", color = Color.White)
+            Text(
+                text = "Fecha: ${formatServerDateTime(emergency.createdAt, "dd/MM/yyyy HH:mm")}",
+                color = Color.White
+            )
             Text(text = "Ubicación: ${emergency.latitude}, ${emergency.longitude}", color = Color.White)
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -1252,7 +1258,9 @@ private fun LastEmergencyEventCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(text = "Enviada por: ${emergency.username}")
-            Text(text = "Fecha: ${emergency.createdAt}")
+            Text(
+                text = "Fecha: ${formatServerDateTime(emergency.createdAt, "dd/MM/yyyy HH:mm")}"
+            )
             Text(text = "Ubicación: ${emergency.latitude}, ${emergency.longitude}")
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -1758,16 +1766,48 @@ private fun MessageItem(
     }
 }
 
-private fun formatMessageTime(createdAt: String): String {
+private fun formatServerDateTime(
+    value: String,
+    outputPattern: String
+): String {
     return try {
-        if (createdAt.length >= 16) {
-            createdAt.substring(11, 16)
-        } else {
-            createdAt
+        if (value.length < 19) {
+            return value
         }
+
+        // El backend almacena y devuelve las fechas en UTC.
+        // Se normalizan los formatos:
+        // 2026-08-18 16:30:00
+        // 2026-08-18T16:30:00
+        val normalized = value
+            .substring(0, 19)
+            .replace('T', ' ')
+
+        val inputFormat = SimpleDateFormat(
+            "yyyy-MM-dd HH:mm:ss",
+            Locale.US
+        ).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+            isLenient = false
+        }
+
+        val date = inputFormat.parse(normalized)
+            ?: return value
+
+        SimpleDateFormat(
+            outputPattern,
+            Locale.getDefault()
+        ).apply {
+            timeZone = TimeZone.getDefault()
+        }.format(date)
+
     } catch (e: Exception) {
-        createdAt
+        value
     }
+}
+
+private fun formatMessageTime(createdAt: String): String {
+    return formatServerDateTime(createdAt, "HH:mm")
 }
 
 private fun hasLocationPermission(context: Context): Boolean {
@@ -2317,7 +2357,7 @@ private fun sendMessageRequest(context: Context, chatId: Int, content: String): 
             Result.success(
                 "Mensaje enviado correctamente." +
                         "\nContenido: $messageContent" +
-                        "\nFecha: $createdAt"
+                        "\nFecha: ${formatServerDateTime(createdAt, "dd/MM/yyyy HH:mm")}"
             )
         } else {
             Result.failure(Exception("HTTP $responseCode: $responseText"))
@@ -2382,7 +2422,7 @@ private fun emergencyRequest(
                         "\nEvento: $eventId" +
                         "\nLatitud: $savedLatitude" +
                         "\nLongitud: $savedLongitude" +
-                        "\nFecha: $createdAt"
+                        "\nFecha: ${formatServerDateTime(createdAt, "dd/MM/yyyy HH:mm")}"
             )
         } else {
             Result.failure(Exception("HTTP $responseCode: $responseText"))
