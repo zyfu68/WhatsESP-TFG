@@ -1,4 +1,4 @@
-﻿# Temporales de Word
+# Temporales de Word
 ~$*.docx
 *.tmp
 # --- Python ---
@@ -11,3 +11,30 @@ venv/
 
 # --- Secrets / env ---
 WhatsESP/backend/.env
+# --- Secrets / environment ---
+.env
+.env.*
+!.env.example
+# --- Android signing keys ---
+*.jks
+*.keystore
+key.properties
+# --- Private keys / certificates ---
+*.pem
+*.key
+id_rsa
+id_ed25519
+# --- Backups / database dumps ---
+backups/
+*.sql
+*.dump
+WhatsESP/docs/HANDOFF_CHAT.md
+*.docx
+*.xlsx
+*.xls
+*.zip
+*.7z
+*.rar
+*.pfx
+*.p12
+WhatsESP/docs/capturas/
